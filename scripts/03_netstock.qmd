@@ -1,0 +1,136 @@
+---
+title: "Netstocks"
+author:
+  - id: jbsc
+    given: José Bayoán
+    family: Santiago Calderón
+    orcid: 0000-0002-8406-6175
+    email: Jose.Santiago-Calderon@bea.gov
+    degrees:
+      - PhD
+    affiliations:
+      - name: Bureau of Economic Analysis
+    group: Analysis and Research Group
+    department: National Economic Accounts
+    city: Suitland
+    state: MD
+    country: USA
+    postal-code: 20746
+    url: https://www.bea.gov
+    ror: https://ror.org/03b17a012
+    ringgold: 17145
+    isni: 0000000101060898
+    attributes:
+      corresponding: true   
+      roles:
+      # conceptualization:
+      - data curation: lead
+      - analysis: lead
+      # funding:
+      - investigation: lead
+      - methodology: lead
+      # project administration
+      # resources
+      - software: lead
+      # supervision
+      # validation
+      - visualization: lead
+      - writing: lead
+      - editing: lead
+date: today
+date-format: iso
+format:
+  html: 
+    code-fold: true
+    self-contained: true
+    smooth-scroll: true
+    html-math-method: katex
+bibliography: ../references.bib
+engine: julia
+abstract: |
+  This script applies the perpetual inventory method to obtain the netstock estimates for data and database assets.
+keywords:
+  - Sum of cost
+  - Own account
+  - IPPs
+license:
+  text: >
+    A work of the United States Government (17 U.S.C. § 105).
+  type: open-access
+  url: https://www.copyright.gov/title17/92chap1.html#105.
+---
+
+```{julia}
+const DIR_PRJ = string(strip(read(`git rev-parse --show-toplevel`, String)))
+using Pkg
+Pkg.activate(DIR_PRJ)
+```
+
+```{julia}
+using CSV, DataFrames, TidierData
+```
+
+# PIM
+
+```{julia}
+DEPRECIATION_RATE = 1 / 3
+```
+
+```{julia}
+flow = CSV.read(
+    joinpath(DIR_PRJ, "data", "flow.tsv"),
+    DataFrame
+)
+```
+
+```{julia}
+function pim(tbl)
+    netstock = zeros(size(tbl.volume))
+    cfc = zeros(size(tbl.volume))
+    netstock[1] = tbl.volume[1] / DEPRECIATION_RATE
+    for i in 2:length(netstock)
+        netstock[i] = tbl.volume[i] / 2 +
+            (netstock[i - 1] + tbl.volume[i] / 2) *
+            (1 - DEPRECIATION_RATE)
+        cfc[i] = (tbl.volume[i] / 2 + netstock[i - 1]) * DEPRECIATION_RATE
+    end
+    tbl[!, :netstock] = netstock
+    tbl[!, :cfc] = cfc
+    tbl
+end
+```
+
+```{julia}
+prices = @chain CSV.read(
+    joinpath(DIR_PRJ, "data", "prices.tsv"),
+    DataFrame
+    ) begin
+    @select(year, price = price / 100)
+end
+```
+
+```{julia}
+netstock = @chain flow begin
+    @arrange(account, year)
+    @select(account, year, volume)
+    dropmissing!
+    @group_by(account)
+    combine(pim)
+    @inner_join(prices)
+    @mutate(
+        cfc = cfc * price,
+        netstock,
+        current_cost_netstock = netstock * price
+    )
+    dropmissing!
+    @select(-price)
+end
+```
+
+```{julia}
+CSV.write(
+    joinpath(DIR_PRJ, "data", "stock.tsv"),
+    netstock,
+    delim = '\t'
+)
+```

@@ -1,0 +1,117 @@
+naics	naics_title	account	aggregate	description	production_account
+1130	Forestry and Logging	113FF	11	Forestry, fishing, and related activities	Agriculture, forestry, fishing, and hunting
+1150	Support Activities for Agriculture and Forestry	113FF	11	Forestry, fishing, and related activities	Agriculture, forestry, fishing, and hunting
+2110	Oil and Gas Extraction	211	21	Oil and gas extraction	Mining
+2120	Mining (except Oil and Gas)	212	21	Mining, except oil and gas	Mining
+2130	Support Activities for Mining	213	21	Support activities for mining	Mining
+2210	Utilities	22	22	Utilities	Utilities
+2360	Construction of Buildings	23	23	Construction	Construction
+2370	Heavy and Civil Engineering Construction	23	23	Construction	Construction
+2380	Specialty Trade Contractors	23	23	Construction	Construction
+3110	Food Manufacturing	311FT	31G	Food and beverage and tobacco products	Manufacturing
+3120	Beverage and Tobacco Product Manufacturing	311FT	31G	Food and beverage and tobacco products	Manufacturing
+3130	Textile Mills	313TT	31G	Textile mills and textile product mills	Manufacturing
+3140	Textile Product Mills	313TT	31G	Textile mills and textile product mills	Manufacturing
+3150	Apparel Manufacturing	315AL	31G	Apparel and leather and allied products	Manufacturing
+3160	Leather and Allied Product Manufacturing	315AL	31G	Apparel and leather and allied products	Manufacturing
+3210	Wood Product Manufacturing	321	31G	Wood products	Manufacturing
+3220	Paper Manufacturing	322	31G	Paper products	Manufacturing
+3230	Printing and Related Support Activities	323	31G	Printing and related support activities	Manufacturing
+3240	Petroleum and Coal Products Manufacturing	324	31G	Petroleum and coal products	Manufacturing
+3250	Chemical Manufacturing	325	31G	Chemical products	Manufacturing
+3260	Plastics and Rubber Products Manufacturing	326	31G	Plastics and rubber products	Manufacturing
+3270	Nonmetallic Mineral Product Manufacturing	327	31G	Nonmetallic mineral products	Manufacturing
+3310	Primary Metal Manufacturing	331	31G	Primary metals	Manufacturing
+3320	Fabricated Metal Product Manufacturing	332	31G	Fabricated metal products	Manufacturing
+3330	Machinery Manufacturing	333	31G	Machinery	Manufacturing
+3340	Computer and Electronic Product Manufacturing	334	31G	Computer and electronic products	Manufacturing
+3350	Electrical Equipment  Appliance  and Component Manufacturing	335	31G	Electrical equipment, appliances, and components	Manufacturing
+3361	Motor Vehicle Manufacturing	3361MV	31G	Motor vehicles, bodies and trailers, and parts	Manufacturing
+3362	Motor Vehicle Body and Trailer Manufacturing	3361MV	31G	Motor vehicles, bodies and trailers, and parts	Manufacturing
+3363	Motor Vehicle Parts Manufacturing	3361MV	31G	Motor vehicles, bodies and trailers, and parts	Manufacturing
+3364	Aerospace Product and Parts Manufacturing	3364OT	31G	Other transportation equipment	Manufacturing
+3365	Railroad Rolling Stock Manufacturing	3364OT	31G	Other transportation equipment	Manufacturing
+3366	Ship and Boat Building	3364OT	31G	Other transportation equipment	Manufacturing
+3369	Other Transportation Equipment Manufacturing	3364OT	31G	Other transportation equipment	Manufacturing
+3370	Furniture and Related Product Manufacturing	337	31G	Furniture and related products	Manufacturing
+3390	Miscellaneous Manufacturing	339	31G	Miscellaneous manufacturing	Manufacturing
+4230	Merchant Wholesalers  Durable Goods	42	42	Wholesale trade	Wholesale trade
+4240	Merchant Wholesalers  Nondurable Goods	42	42	Wholesale trade	Wholesale trade
+4250	Wholesale Electronic Markets and Agents and Brokers	42	42	Wholesale trade	Wholesale trade
+4410	Motor Vehicle and Parts Dealers	441	44RT	Motor vehicle and parts dealers	Retail trade
+4420	Furniture and Home Furnishings Stores	4A0	44RT	Other retail	Retail trade
+4430	Electronics and Appliance Stores	4A0	44RT	Other retail	Retail trade
+4440	Building Material and Garden Equipment and Supplies Dealers	4A0	44RT	Other retail	Retail trade
+4450	Food and Beverage Retailers	445	44RT	Food and beverage retailers	Retail trade
+4460	Health and Personal Care Stores	4A0	44RT	Other retail	Retail trade
+4470	Gasoline Stations	4A0	44RT	Other retail	Retail trade
+4480	Clothing and Clothing Accessories Stores	4A0	44RT	Other retail	Retail trade
+4490	Furniture  Home Furnishings  Electronics  and Appliance Retailers	4A0	44RT	Other retail	Retail trade
+4510	Sporting Goods  Hobby  Musical Instrument  and Book Stores	4A0	44RT	Other retail	Retail trade
+4520	General Merchandise Stores	452	44RT	General merchandise stores	Retail trade
+4530	Miscellaneous Store Retailers	4A0	44RT	Other retail	Retail trade
+4540	Nonstore Retailers	4A0	44RT	Other retail	Retail trade
+4550	General Merchandise Retailers	452	44RT	General merchandise stores 	Retail trade
+4560	Health and Personal Care Retailers	4A0	44RT	Other retail	Retail trade
+4570	Gasoline Stations and Fuel Dealers	4A0	44RT	Other retail	Retail trade
+4580	Clothing  Clothing Accessories  Shoe  and Jewelry Retailers	4A0	44RT	Other retail	Retail trade
+4590	Sporting Goods  Hobby  Musical Instrument  Book  and Miscellaneous Retailers	4A0	44RT	Other retail	Retail trade
+4810	Air Transportation	481	48TW	Air transportation	Transportation and warehousing
+4820	Rail Transportation	482	48TW	Rail transportation	Transportation and warehousing
+4830	Water Transportation	483	48TW	Water transportation	Transportation and warehousing
+4840	Truck Transportation	484	48TW	Truck transportation	Transportation and warehousing
+4850	Transit and Ground Passenger Transportation	485	48TW	Transit and ground passenger transportation	Transportation and warehousing
+4860	Pipeline Transportation	486	48TW	Pipeline transportation	Transportation and warehousing
+4870	Scenic and Sightseeing Transportation	487OS	48TW	Other transportation and support activities	Transportation and warehousing
+4880	Support Activities for Transportation	487OS	48TW	Other transportation and support activities	Transportation and warehousing
+4910	Postal Service	GF	G	Federal	Government
+4920	Couriers and Messengers	487OS	48TW	Other transportation and support activities	Transportation and warehousing
+4930	Warehousing and Storage	493	48TW	Warehousing and storage	Transportation and warehousing
+5110	Publishing Industries (except Internet)	511	51	Publishing industries, except internet (includes software)	Information
+5120	Motion Picture and Sound Recording Industries	512	51	Motion picture and sound recording industries	Information
+5130	Publishing Industries	513	51	Broadcasting and telecommunications	Information
+5150	Broadcasting (except Internet)	513	51	Broadcasting and telecommunications	Information
+5160	Broadcasting and Content Providers	511	51	Publishing industries, except internet (includes software)	Information
+5170	Telecommunications	513	51	Broadcasting and telecommunications	Information
+5180	Data Processing  Hosting  and Related Services	514	51	Data processing, internet publishing, and other information services	Information
+5190	Other Information Services	514	51	Data processing, internet publishing, and other information services	Information
+5210	Monetary Authorities - Central Bank	521CI	52	Federal Reserve banks, credit intermediation, and related activities	Finance and insurance
+5220	Credit Intermediation and Related Activities	521CI	52	Federal Reserve banks, credit intermediation, and related activities	Finance and insurance
+5230	Securities  Commodity Contracts  and Other Financial Investments and Related Activities	523	52	Securities, commodity contracts, and investments	Finance and insurance
+5240	Insurance Carriers and Related Activities	524	52	Insurance carriers and related activities	Finance and insurance
+5250	Funds  Trusts  and Other Financial Vehicles	525	52	Funds, trusts, and other financial vehicles	Finance and insurance
+5310	Real Estate	531	53	Real estate	Real estate and rental and leasing
+5320	Rental and Leasing Services	532RL	53	Rental and leasing services and lessors of intangible assets	Real estate and rental and leasing
+5330	Lessors of Nonfinancial Intangible Assets (except Copyrighted Works)	532RL	53	Rental and leasing services and lessors of intangible assets	Real estate and rental and leasing
+5411	Legal Services	5411	54	Legal services	Professional, scientific, and technical services
+5412	Accounting  Tax Preparation  Bookkeeping  and Payroll Services	5412OP	54	Miscellaneous professional, scientific, and technical services	Professional, scientific, and technical services
+5413	Architectural  Engineering  and Related Services	5412OP	54	Miscellaneous professional, scientific, and technical services	Professional, scientific, and technical services
+5414	Specialized Design Services	5412OP	54	Miscellaneous professional, scientific, and technical services	Professional, scientific, and technical services
+5415	Computer Systems Design and Related Services	5415	54	Computer systems design and related services	Professional, scientific, and technical services
+5416	Management  Scientific  and Technical Consulting Services	5412OP	54	Miscellaneous professional, scientific, and technical services	Professional, scientific, and technical services
+5417	Scientific Research and Development Services	5412OP	54	Miscellaneous professional, scientific, and technical services	Professional, scientific, and technical services
+5418	Advertising and Related Services	5412OP	54	Miscellaneous professional, scientific, and technical services	Professional, scientific, and technical services
+5418	Advertising  Public Relations  and Related Services	5412OP	54	Miscellaneous professional, scientific, and technical services	Professional, scientific, and technical services
+5419	Other Professional  Scientific  and Technical Services	5412OP	54	Miscellaneous professional, scientific, and technical services	Professional, scientific, and technical services
+5510	Management of Companies and Enterprises	55	55	Management of companies and enterprises	Management of companies and enterprises
+5610	Administrative and Support Services	561	56	Administrative and support services	Administrative and waste management services
+5620	Waste Management and Remediation Services	562	56	Waste management and remediation services	Administrative and waste management services
+6110	Educational Services	61	61	Educational services	Educational services
+6210	Ambulatory Health Care Services	621	62	Ambulatory health care services	Health care and social assistance
+6220	Hospitals	622HO	62	Hospitals	Health care and social assistance
+6230	Nursing and Residential Care Facilities	623	62	Nursing and residential care facilities	Health care and social assistance
+6240	Social Assistance	624	62	Social assistance	Health care and social assistance
+7110	Performing Arts  Spectator Sports  and Related Industries	711AS	71	Performing arts, spectator sports, museums, and related activities	Arts, entertainment, and recreation
+7120	Museums  Historical Sites  and Similar Institutions	711AS	71	Performing arts, spectator sports, museums, and related activities	Arts, entertainment, and recreation
+7130	Amusement  Gambling  and Recreation Industries	713	71	Amusements, gambling, and recreation industries	Arts, entertainment, and recreation
+7210	Accommodation	721	72	Accommodation	Accommodation and food services
+7220	Food Services and Drinking Places	722	72	Food services and drinking places	Accommodation and food services
+8110	Repair and Maintenance	81	81	Other services, except government	Other services, except government
+8120	Personal and Laundry Services	81	81	Other services, except government	Other services, except government
+8130	Religious  Grantmaking  Civic  Professional  and Similar Organizations	81	81	Other services, except government	Other services, except government
+9991	Federal Executive Branch	GF	G	Federal	Government
+9992	State Government (excluding schools and hospitals)	GSL	G	State and local	Government
+9993	Local Government (excluding schools and hospitals)	GSL	G	State and local	Government
+9010	Federal Executive Branch	GF	G	Federal	Government
+9020	State Government	GSL	G	State and local	Government
+9030	Local Government	GSL	G	State and local	government

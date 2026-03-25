@@ -1,0 +1,392 @@
+---
+title: "Prices and Volume"
+author:
+  - id: jbsc
+    given: José Bayoán
+    family: Santiago Calderón
+    orcid: 0000-0002-8406-6175
+    email: Jose.Santiago-Calderon@bea.gov
+    degrees:
+      - PhD
+    affiliations:
+      - name: Bureau of Economic Analysis
+    group: Analysis and Research Group
+    department: National Economic Accounts
+    city: Suitland
+    state: MD
+    country: USA
+    postal-code: 20746
+    url: https://www.bea.gov
+    ror: https://ror.org/03b17a012
+    ringgold: 17145
+    isni: 0000000101060898
+    attributes:
+      corresponding: true   
+      roles:
+      # conceptualization:
+      - data curation: lead
+      - analysis: lead
+      # funding:
+      - investigation: lead
+      - methodology: lead
+      # project administration
+      # resources
+      - software: lead
+      # supervision
+      # validation
+      - visualization: lead
+      - writing: lead
+      - editing: lead
+date: today
+date-format: iso
+format:
+  html: 
+    code-fold: true
+    self-contained: true
+    smooth-scroll: true
+    html-math-method: katex
+bibliography: ../references.bib
+engine: julia
+abstract: |
+  This script develops prices for investment of data and database assets and the associate estimates for the volume.
+keywords:
+  - Sum of cost
+  - Own account
+  - IPPs
+license:
+  text: >
+    A work of the United States Government (17 U.S.C. § 105).
+  type: open-access
+  url: https://www.copyright.gov/title17/92chap1.html#105.
+---
+
+```{julia}
+const DIR_PRJ = string(strip(read(`git rev-parse --show-toplevel`, String)))
+using Pkg
+Pkg.activate(DIR_PRJ)
+```
+
+```{julia}
+using Dates
+using CSV, DataFrames, TidierData
+using unzip_jll: unzip
+using XLSX: XLSX, readtable
+using HTTP: HTTP, URI, request
+using ExcelFiles: ExcelFiles, openxl, readxl, load
+using Impute
+using CairoMakie
+using CairoMakie: RGB, Colors.distinguishable_colors
+using AlgebraOfGraphics
+set_aog_theme!()
+```
+
+```{julia}
+COLORS = [
+    RGB(0, 76 / 255, 151 / 255),
+    RGB(216 / 255, 96 / 255, 24 / 255),
+    RGB(158 / 255, 162 / 255, 162 / 255),
+    RGB(108 / 255, 172 / 255, 228 / 255),
+    RGB(195 / 255, 215 / 255, 238 / 255),
+    RGB(0, 125 / 255, 138 / 255),
+    RGB(45 / 255, 204 / 255, 211 / 255),
+    RGB(177 / 255, 228 / 255, 227 / 255),
+    RGB(193 / 255, 196 / 255, 197 / 255),
+    RGB(220 / 255, 222 / 255, 223 / 255),
+    RGB(242 / 255, 169 / 255, 0),
+    RGB(255 / 255, 233 / 255, 195 / 255),
+];
+```
+
+# Prices
+
+## Industry Mapping
+
+```{julia}
+naics2ipa = CSV.read(
+    joinpath(DIR_PRJ, "data", "provided", "naics2ipa.tsv"),
+    DataFrame
+)
+```
+
+## Labor
+
+```{julia}
+gfcf = CSV.read(
+    joinpath(DIR_PRJ, "data", "gfcf.tsv"),
+    DataFrame
+)
+```
+
+We use the hours worked from BLS. Once can obtain the file from https://www.bls.gov/productivity/tables/: [Detailed industries: hours and employment – June 26, 2025 (XLSX)](https://www.bls.gov/productivity/tables/hours-employment-detailed-industries.xlsx).
+
+```{julia}
+hours = @chain readtable(
+    joinpath(DIR_PRJ, "data", "hours-employment-detailed-industries.xlsx"),
+    "MachineReadable",
+    ) begin
+    DataFrame
+    @filter(
+        (Measure == "Hours worked") & (Units == "Millions of hours") &
+        ((Digit == "3-Digit") | (Digit == "4-Digit"))
+    )
+    @select(
+        year = as_integer(Year) - 1,
+        naics = as_integer(rpad(as_string(NAICS), 4, '0')),
+        value = as_float(Value)
+    )
+    @inner_join(
+        @chain naics2ipa begin
+            @select(naics, account)
+            @distinct
+        end
+    )
+    @group_by(account, year)
+    @summarize(hours = sum(value))
+    @ungroup
+end
+```
+
+We also compute the cost of labor per unit.
+
+```{julia}
+labor_cost_per_unit = @chain gfcf begin
+    @inner_join(hours)
+    @mutate(tot_emp = tot_emp * hours)
+    @group_by(year)
+    @summarize(
+        labor = as_integer(sum(labor)),
+        tot_emp = sum(tot_emp)
+    )
+    @arrange
+    @select(
+        year,
+        labor_cost_per_unit = 1_000labor / tot_emp
+    )
+    @mutate(
+        Δp = Main.log(labor_cost_per_unit / lag(labor_cost_per_unit))
+    )
+    dropmissing!
+    @select(
+        year,
+        factor = "L",
+        Δp
+    )
+    dropmissing!
+    @bind_rows(
+        @chain gfcf begin
+            @filter(year ∈ 2023:2024)
+            @group_by(year)
+            @summarize(
+                labor_cost_per_unit = sum(labor) / sum(tot_emp)
+            )
+            @mutate(
+                Δp = Main.log(labor_cost_per_unit / lag(labor_cost_per_unit))
+            )
+            dropmissing!
+            @select(year, factor = "L", Δp)
+        end
+    )
+    @arrange
+end
+```
+
+```{julia}
+alems = CSV.read(
+    joinpath(DIR_PRJ, "data", "alems.tsv"),
+    DataFrame
+)
+price_data_wgt = @chain labor_cost_per_unit begin
+    @select(year, Δ = Δp)
+    @inner_join(
+        x = @chain alems begin
+            @right_join(
+                crossjoin(
+                    DataFrame(year = 1997:2024),
+                    DataFrame(factor = ["L", "EMS", "TFP"])
+                )
+            )
+        end
+    )
+    # @mutate(Δp = coalesce(Δp, Δ))
+    @mutate(Δp = case_when(
+        factor == "L" => coalesce(Δp, Δ),
+        true => Δp
+    ))
+    @arrange(factor, year)
+    @group_by(factor)
+    @summarize(
+        year,
+        wgt = ~Impute.locf(wgt),
+        Δp = ~Impute.locf(Δp)
+    )
+    # @mutate(
+    #     wgt = if_else((year ≤ 2_000) & (factor == "TFP"), 0, wgt)
+    # )
+    @mutate(wgt = wgt * Δp)
+end
+price_data = @chain price_data_wgt begin
+    @group_by(year)
+    @summarize(Δ = sum(wgt))
+end
+```
+
+```{julia}
+plt_price_wgt = data(
+    @chain price_data_wgt begin
+        # @filter(factor ∈ ["L", "EMS"])
+        # @group_by(year)
+        # @summarize(wgt = sum(wgt))
+        # @summarize(x = minimum(wgt), y = maximum(wgt))
+    end
+    ) *
+    mapping(
+        :year => "",
+        :wgt => "Contribution",
+        color = :factor => renamer(
+            "TFP" => "Productivity adjustment",
+            "EMS" => "Intermediate inputs",
+            "L" => "Labor costs"
+        ) => "",
+        stack = :factor => "",
+    ) *
+    visual(BarPlot)
+fig = draw(
+    plt_price_wgt,
+    scales(
+        Color = (;
+            palette = COLORS[1:3]
+        )
+    ),
+    axis = (;
+        xticks = 1998:2:2024,
+        yticks = -0.07:0.01:0.1,
+        limits = (1997.5, 2024.5, -0.07, 0.10),
+        xticklabelrotation = π / 3,
+    ),
+    legend = (;
+        position=:top,
+    ),
+)
+save(
+    joinpath(DIR_PRJ, "figs", "price_decomposed.eps"),
+    fig
+)
+```
+
+We obtain the intermediate input data from BEA.
+
+```{julia}
+function obtain_prices(tbl)
+    t₀ = minimum(tbl[!, :year]) - 1
+    prices = @chain tbl begin
+        @select(year, price)
+        @bind_rows(
+            DataFrame(
+                year = t₀,
+                price = 0.0
+            )
+        )
+        @arrange
+        @mutate(x = case_when(
+            year == 2017 => 1.0,
+            true => missing
+            )
+        )
+    end
+    for i in range(
+        findfirst(isequal(2018), prices[!, :year]),
+        nrow(prices)
+        )
+        prices[i, :x] =
+            prices[i - 1, :x] *
+            exp(prices.price[i])
+    end
+    for i in collect(range(
+        findfirst(isequal(2016), prices[!, :year]),
+        1,
+        step = -1
+            )
+        )
+        prices[i, :x] =
+            prices[i + 1, :x] /
+            exp(prices.price[i + 1])
+    end
+    output = @chain prices begin
+        @select(year, price = x)
+        dropmissing!
+    end
+end
+```
+
+## Pseudo output prices
+
+```{julia}
+prices = @chain price_data begin
+    @rename(price = Δ)
+    @arrange(year)
+    combine(obtain_prices)
+    dropmissing!
+end
+```
+
+```{julia}
+plt = data(prices) *
+    mapping(
+        :year => "Year",
+        :price => (x -> 100x) => "Price (2017)"
+    ) *
+    (visual(Scatter) + visual(Lines))
+fig = draw(
+    plt,
+    axis = (;
+        limits = (1996.75, 2024.25, nothing, 115),
+        xticks = 1997:2:2024,
+        yticks = 40:5:120,
+        xticklabelrotation = π / 3,
+    ),
+    legend = (;
+        position=:top,
+    ),
+)
+```
+
+```{julia}
+save(
+    joinpath(DIR_PRJ, "figs", "prices.eps"),
+    fig
+)
+```
+
+# Real GFCF
+
+```{julia}
+volume_estimates = @chain gfcf begin
+    @left_join(prices)
+    @mutate(real = gfcf / price)
+    @arrange
+end
+```
+
+```{julia}
+CSV.write(
+    joinpath(DIR_PRJ, "data", "prices.tsv"),
+    @select(prices, year, price = 100price),
+    delim = '\t'
+)
+```
+
+```{julia}
+CSV.write(
+    joinpath(DIR_PRJ, "data", "flow.tsv"),
+    (@chain volume_estimates begin
+        @group_by(account, year)
+        @summarize(
+            gfcf = sum(gfcf),
+            volume = sum(real)
+        )
+        @ungroup
+        @arrange
+    end),
+    delim = '\t'
+)
+```

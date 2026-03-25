@@ -1,0 +1,72 @@
+id	account	detailed_agg	description
+1	111CA		Farms
+2	113FF		Forestry, fishing, and related activities
+3	211		Oil and gas extraction
+4	212		Mining, except oil and gas
+5	213		Support activities for mining
+6	22		Utilities
+7	23		Construction
+8	321		Wood products
+9	327		Nonmetallic mineral products
+10	331		Primary metals
+11	332		Fabricated metal products
+12	333		Machinery
+13	334		Computer and electronic products
+14	335		Electrical equipment, appliances, and components
+15	3361MV		Motor vehicles, bodies and trailers, and parts
+16	3364OT		Other transportation equipment
+17	337		Furniture and related products
+18	339		Miscellaneous manufacturing
+19	311FT		Food and beverage and tobacco products
+20	313TT		Textile mills and textile product mills
+21	315AL		Apparel and leather and allied products
+22	322		Paper products
+23	323		Printing and related support activities
+24	324		Petroleum and coal products
+25	325		Chemical products
+26	326		Plastics and rubber products
+27	42		Wholesale trade
+28	441	44RT	Motor vehicle and parts dealers
+29	445	44RT	Food and beverage stores
+30	452	44RT	General merchandise stores
+31	4A0	44RT	Other retail
+32	481		Air transportation
+33	482		Rail transportation
+34	483		Water transportation
+35	484		Truck transportation
+36	485		Transit and ground passenger transportation
+37	486		Pipeline transportation
+38	487OS		Other transportation and support activities
+39	493		Warehousing and storage
+40	511		Publishing industries, except internet (includes software)
+41	512		Motion picture and sound recording industries
+42	513		Broadcasting and telecommunications
+43	514		Data processing, internet publishing, and other information services
+44	521CI		Federal Reserve banks, credit intermediation, and related activities
+45	523		Securities, commodity contracts, and investments
+46	524		Insurance carriers and related activities
+47	525		Funds, trusts, and other financial vehicles
+48	HS	531	Housing
+49	ORE	531	Other real estate
+50	532RL		Rental and leasing services and lessors of intangible assets
+51	5411		Legal services
+52	5415		Computer systems design and related services
+53	5412OP		Miscellaneous professional, scientific, and technical services
+54	55		Management of companies and enterprises
+55	561		Administrative and support services
+56	562		Waste management and remediation services
+57	61		Educational services
+58	621		Ambulatory health care services
+59	622	622HO	Hospitals
+60	623	622HO	Nursing and residential care facilities
+61	624		Social assistance
+62	711AS		Performing arts, spectator sports, museums, and related activities
+63	713		Amusements, gambling, and recreation industries
+64	721		Accommodation
+65	722		Food services and drinking places
+66	81		Other services, except government
+67	GFGD	GF	National defense
+68	GFGN	GF	Nondefense
+69	GFE	GF	GFE
+70	GSLG	GSL	General government
+71	GSLE	GSL	GSLE

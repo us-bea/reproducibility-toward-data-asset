@@ -1,0 +1,1026 @@
+---
+title: "Series"
+author:
+  - id: jbsc
+    given: José Bayoán
+    family: Santiago Calderón
+    orcid: 0000-0002-8406-6175
+    email: Jose.Santiago-Calderon@bea.gov
+    degrees:
+      - PhD
+    affiliations:
+      - name: Bureau of Economic Analysis
+    group: Analysis and Research Group
+    department: National Economic Accounts
+    city: Suitland
+    state: MD
+    country: USA
+    postal-code: 20746
+    url: https://www.bea.gov
+    ror: https://ror.org/03b17a012
+    ringgold: 17145
+    isni: 0000000101060898
+    attributes:
+      corresponding: true   
+      roles:
+      # conceptualization:
+      - data curation: lead
+      - analysis: lead
+      # funding:
+      - investigation: lead
+      - methodology: lead
+      # project administration
+      # resources
+      - software: lead
+      # supervision
+      # validation
+      - visualization: lead
+      - writing: lead
+      - editing: lead
+date: today
+date-format: iso
+format:
+  html: 
+    code-fold: true
+    self-contained: true
+    smooth-scroll: true
+    html-math-method: katex
+bibliography: ../references.bib
+engine: julia
+abstract: |
+  This script uses a modified version of the OEWS tables to estimate the share of compensation of employees by industry and year are attributed to various occupation groups. For the occupation groups, we use estimated time-use factors related to gross fixed capital formation of data and database assets. These involvement rates come from the BEA-developed estimates using Lighcast online job, O*NET, and NCSES data. Lastly, we use BEA industry tables to estimate a full-production cost adjustment factor to obtain nominal investment in own account data and database assets.
+keywords:
+  - Sum of cost
+  - Own account
+  - IPPs
+license:
+  text: >
+    A work of the United States Government (17 U.S.C. § 105).
+  type: open-access
+  url: https://www.copyright.gov/title17/92chap1.html#105.
+---
+
+We start by instantiating the environment.
+
+```{julia}
+const DIR_PRJ = string(strip(read(`git rev-parse --show-toplevel`, String)))
+using Pkg
+Pkg.activate(DIR_PRJ)
+# Pkg.instantiate()
+```
+
+We load the packages to be used in the script.
+
+```{julia}
+using Base: Fix2
+using CSV, DataFrames, TidierData
+using StatFiles
+using Arrow
+using ExcelFiles: ExcelFiles, openxl, readxl, load
+using XLSX: XLSX, readtable
+using HTTP: HTTP, URI, request
+using unzip_jll: unzip
+using Impute
+using CairoMakie
+using CairoMakie: RGB, Colors.distinguishable_colors
+using AlgebraOfGraphics
+set_aog_theme!()
+```
+
+Define a color palette for visualizations.
+
+# R&D
+
+We first get the National Survey of College Graduates ([NSCG](https://ncses.nsf.gov/explore-data/microdata/national-survey-college-graduates)) Public Use Data Files.
+
+```{julia}
+isdir(joinpath(DIR_PRJ, "data", "ncses")) || mkdir(joinpath(DIR_PRJ, "data", "ncses"))
+if !isfile(joinpath(DIR_PRJ, "data", "ncses", "college_grads_2021.zip"))
+    infile = joinpath(DIR_PRJ, "data", "ncses", "college_grads_2021.zip")
+    response = request(
+        "GET",
+        URI(
+            scheme = "https",
+            host = "ncses.nsf.gov",
+            path = "/822/assets/0/files/college_grads_2021.zip"
+        )
+    )
+    write(infile, response.body)
+    dir = dirname(infile)
+    run(`$(unzip()) $infile -d $dir`)
+end
+```
+
+You can read the data and right it to a format which is easier to load.
+
+```{julia}
+# begin
+#     x = load(
+# 	    joinpath(DIR_PRJ, "data", "ncses", "pcg21Public", "epcg21.sas7bdat")
+#     )
+#     y = DataFrame(x)
+#     Arrow.write(
+# 	    joinpath(DIR_PRJ, "data", "ncses", "nscg21.arrow"),
+# 	    y
+#     )
+# end
+```
+
+The crosswalk was manually constructed based on the identified components (OEWS 2002--2023).
+
+```{julia}
+# ncses_occ = @chain CSV.read(
+#     joinpath(DIR_PRJ, "data", "provided", "N3OCPR.tsv"),
+#     DataFrame
+# ) begin
+#     dropmissing!
+# end
+```
+
+We read the public data files for the NSCG 2021.
+
+```{julia}
+# nscg21 = DataFrame(Arrow.Table(joinpath(DIR_PRJ, "data", "ncses", "nscg21.arrow")))
+```
+
+We compute the share of employees per occupation that their primary role is R&D.
+
+```{julia}
+# nscg21_ = @chain nscg21 begin
+#     @select(
+#         wgt = WTSURVY,
+#         occ = as_integer(N3OCPR),
+#         primary = WAPRSM,
+#         secondary = WASCSM,
+#         software10 = WACOM
+#     )
+#     @group_by(
+#         occ, primary, secondary, software10
+#     )
+#     @summarize(
+#         wgt = sum(wgt)
+#     )
+#     @ungroup
+#     @group_by(occ)
+#     combine(_) do subdf
+#         primary_rnd = @chain subdf begin
+#             @select(wgt, primary)
+#             dropmissing!
+#             @mutate(
+#                 mostly_rnd = if_else(primary == "1", "rnd", "not_rnd")
+#             )
+#             @group_by(mostly_rnd)
+#             @summarize(wgt = sum(wgt))
+#             @pivot_wider(names_from = mostly_rnd, values_from = wgt)
+#         end
+#         output_rnd = if "rnd" ∉ names(primary_rnd)
+#             DataFrame(rnd=0)
+#         elseif "not_rnd" ∉ names(primary_rnd)
+#             DataFrame(rnd=1)
+#         else
+#             @chain primary_rnd begin
+#                 @select(rnd = round(rnd / (rnd + not_rnd), digits=4))
+#                 dropmissing!
+#             end
+#         end
+#         software = @chain subdf begin
+#             @select(wgt, software10)
+#             dropmissing!
+#             @mutate(
+#                 software10 = if_else(software10 == "Y", "software", "not_software")
+#             )
+#             @group_by(software10)
+#             @summarize(wgt = sum(wgt))
+#             @pivot_wider(names_from = software10, values_from = wgt)
+#         end
+#         output_software = if "software" ∉ names(software)
+#             DataFrame(software=0)
+#         elseif "not_software" ∉ names(software)
+#             DataFrame(software=1)
+#         else
+#             @chain software begin
+#                 @select(software = round(software / (software + not_software), digits=2))
+#                 dropmissing!
+#             end
+#         end
+#         output = @chain output_rnd begin
+#             @bind_cols(output_software)
+#         end
+#     end
+#     dropmissing!
+#     @inner_join(ncses_occ)
+#     @arrange(occ)
+# end
+```
+
+```{julia}
+# nscg21__ = @chain nscg21_ begin
+#     @group_by(component)
+#     @summarize(
+#         rnd = round(mean(rnd), digits = 4),
+#         software = round(mean(software), digits = 4)
+#     )
+# end
+# CSV.write(
+#     joinpath(DIR_PRJ, "data", "ncses", "nscg21.tsv"),
+#     nscg21__,
+#     delim = '\t'
+# )
+```
+
+```{julia}
+nscg21_ = CSV.read(joinpath(DIR_PRJ, "data", "ncses", "nscg21.tsv"), DataFrame)
+```
+
+# Employment and Wages
+
+Read the employment and wages files by components.
+
+```{julia}
+oews_timeseries = @chain CSV.read(
+    joinpath(DIR_PRJ, "data", "oews", "timeseries_02_12.tsv"),
+    DataFrame
+    ) begin
+    @bind_rows(
+        CSV.read(
+            joinpath(DIR_PRJ, "data", "oews", "timeseries_13_24.tsv"),
+            DataFrame
+        )
+    )
+end
+```
+
+Obtain the crosswalk file from SOC 2018 to the components.
+
+```{julia}
+soc_socs = @chain oews_timeseries begin
+    @select(component)
+    @distinct
+    @group_by(component)
+    combine(_) do subdf
+        DataFrame(soc18 = split(only(subdf.component), " | "))
+    end
+end
+```
+
+From SOC 2018 we map those to the employment and wages components.
+
+```{julia}
+components = @chain oews_timeseries begin
+    @select(component)
+    @distinct
+    @group_by(component)
+    @summarize(soc18 = split(~only(component), " | "))
+end
+```
+
+```{julia}
+component_ttl = @chain oews_timeseries begin
+    @arrange(desc(year))
+    @select(component, occ_ttl)
+    @distinct(component)
+end
+```
+
+```{julia}
+CSV.write(
+    joinpath(DIR_PRJ, "data", "components_ttl.tsv"),
+    component_ttl,
+    delim = '\t'
+)
+```
+
+# BEA
+
+We first obtain the share of job openings with some skill identified as relevant to data activities by component.
+
+```{julia}
+lightcast = @chain CSV.read(
+    joinpath(DIR_PRJ, "data", "provided",  "job_ads.tsv"),
+    DataFrame,
+) begin
+    @right_join(
+        @chain oews_timeseries begin
+            @select(component, year)
+            @arrange(component, desc(year))
+            @select(-year)
+            @distinct(component)
+        end
+    )
+    @mutate(lightcast = coalesce(5as_integer(round(100lightcast) / 5), 0))
+    @mutate(lightcast = if_else(lightcast < 10, 0, lightcast))
+end
+```
+
+We also include a curated list based on O*NET [@ONET] and the Occupational Outlook Handbook [@OOH] that restricts occupations to those within a scope/work context which indicates a probable active contribution to data asset formation through their primary work activities.
+
+```{julia}
+probable = @chain CSV.read(
+    joinpath(DIR_PRJ, "data", "provided", "probable.tsv"),
+    DataFrame
+) begin
+    @left_join(@select(nscg21_, component, rnd, software))
+    @mutate(
+        rnd = 5as_integer(round(coalesce(100rnd, 0) / 5)),
+        software = 5as_integer(round(coalesce(100software, 0) / 5))
+    )
+end
+```
+
+We also include the involvement rates used by own account software.
+
+```{julia}
+oas = CSV.read(
+    joinpath(DIR_PRJ, "data", "provided", "oas.tsv"),
+    DataFrame
+)
+```
+
+The final involvement rates are rounded to the nearest factor of 5 within 10 to 90 and reflect the rate based on the online job data adjusted to account for R&D and OAS.
+
+```{julia}
+component_rates = @chain lightcast begin
+    @left_join(probable)
+    @left_join(oas)
+    @mutate(refined = if_else(probable, 5as_integer(round(lightcast * (1 - rnd / 100) / 5)), 0))
+    @mutate(refined = # Adjustment for software
+        if_else(!ismissing(oas), 5as_integer(round(refined * (1 - oas / 100 / 2) / 5)), refined)
+    )
+    @mutate(refined = case_when(
+        refined < 10 => 0,
+        refined > 90 => 90,
+        true => refined
+    ))
+    select(Not([:rnd, :software, :probable, :oas]))
+    dropmissing!
+    @inner_join(component_ttl)
+    @distinct
+end
+```
+
+We save the component rates file.
+
+```{julia}
+CSV.write(
+	joinpath(DIR_PRJ, "data", "occ_lightcast_refined.tsv"),
+	component_rates,
+	delim = '\t'
+)
+```
+
+# Labor Costs
+
+We use a premade mapping of NAICS3/4 to the integrated production accounts at various levels.
+
+```{julia}
+naics2ipa = CSV.read(
+    joinpath(DIR_PRJ, "data", "provided", "naics2ipa.tsv"),
+    DataFrame
+)
+```
+
+```{julia}
+alems = @chain CSV.read(
+    joinpath(DIR_PRJ, "data", "alems.tsv"),
+    DataFrame
+) begin
+end
+ilpa_labor = CSV.read(
+    joinpath(DIR_PRJ, "data", "labor_compensation_87_24_summary.tsv"),
+    DataFrame
+)
+```
+
+Here we identify which NAICS4 map directly to BEA accounts and which should first be aggregated to NAICS3. This is to solve the issue with the OEWS for 2002 which only reports NAICS4.
+
+```{julia}
+naics_valid = @chain naics2ipa begin
+    @select(naics, account, aggregate)
+    @distinct
+    @mutate(detail = case_when(
+        iszero(naics % 10) => 3,
+        true => 4
+        )
+    )
+    @left_join(
+        @chain oews_timeseries begin
+            @select(naics)
+            @distinct
+            @mutate(naics = case_when(
+                naics == 9990 => 9000,
+                naics == 9991 => 9010,
+                naics == 9992 => 9020,
+                naics == 9993 => 9030,
+                true => naics
+                )
+            )
+            @arrange
+        end
+    )
+    @select(aggregate, account, naics)
+    @distinct
+    @arrange
+end
+```
+
+```{julia}
+valid_naics_4 = filter(x -> rem(x, 10) > 0, naics_valid[!, :naics]);
+```
+
+# Labor data
+
+Pre-adjustments for mapping to accounts
+
+```{julia}
+labor_effective = @chain oews_timeseries begin
+    @mutate(
+        #= This is to deal with the issue of 2002 only published using NAICS4 =#
+        naics = case_when(
+            (year == 2002) && (naics ∉ !!valid_naics_4) => naics ÷ 10 * 10,
+            true => naics
+        )
+    )
+    @inner_join(@select(naics_valid, naics)) # This is to filter non-detailed NAICS
+    @mutate(
+        #= Public Admn to Government =#
+        own = case_when(
+            (own ∈ Ref(2:3)) | (naics ∈ Ref(9992:9993)) => "23",
+            true => own
+        )
+    )
+    @mutate(
+        naics = case_when(
+            own == "23" => 9992, # 61-62
+            naics == 4910 => 9991, # Post office
+            true => naics
+        )
+    )
+    @inner_join(@select(naics_valid, account, naics))
+    @group_by(component, account, year)
+    @summarize(
+        tot_emp = sum(tot_emp),
+        payroll = sum(payroll)
+    )
+    @ungroup
+end
+```
+
+We obtain the payroll to labor cost after making the change from OEWS industry codes to BEA industry codes.
+
+```{julia}
+labor_effective_shares = @chain labor_effective begin
+    @pivot_longer(tot_emp:payroll)
+    @group_by(account, variable, year)
+    @summarize(
+        value = sum(value)
+    )
+    @ungroup
+    @pivot_wider(
+        names_from = variable,
+        values_from = value,
+    )
+    @rename(
+        tot_emp_den = tot_emp,
+        payroll_den = payroll,
+    )
+    @left_join(
+        y = @chain labor_effective begin
+            @select(
+                component, account, year, payroll,
+                tot_emp
+            )
+        end
+    )
+    @mutate(
+        labor_share = payroll / payroll_den,
+        employment_share = tot_emp / tot_emp_den,
+        tot_emp_den,
+        payroll,
+        payroll_den
+    )
+    @inner_join(
+        x = @chain ilpa_labor begin
+            @mutate(
+                account = case_when(
+                    contains(account, "GF") => "GF",
+                    contains(account, "GSL") => "GSL",
+                    account == "622" => "622HO",
+                    true => account
+                )
+            )
+            @group_by(year, account)
+            @summarize(
+                labor = sum(value),
+            )
+            @ungroup
+        end
+    )
+    @select(
+        account, component, year, tot_emp,
+        tot_emp_share = labor * labor_share,
+        payroll_res = payroll, payroll_den_res = payroll_den,
+        labor = labor * labor_share,
+        payroll, labor_share,
+        employment_share
+    )
+    @arrange
+    dropmissing!
+end
+```
+
+We use the involvement rates to obtain the effective labor cost.
+
+```{julia}
+data_payroll = @chain labor_effective_shares begin
+    @inner_join(component_rates)
+    @pivot_longer([labor, employment_share])
+    @pivot_longer(
+        lightcast:refined,
+        names_to = :method,
+        values_to = :rate
+    )
+    @filter(method == "refined")
+    @select(
+        account,
+        component,
+        year,
+        variable,
+        value = value * rate / 100
+    )
+    @filter(value > 0)
+end
+```
+
+We purge certain occupations for which their contribution is minimal afect considering their labor cost (i.e., combination of the payroll determined by employment, wages, and involvement rates). The adjustment is for simplicity since it does not affect the series.
+
+```{julia}
+data_payroll_x = @chain data_payroll begin
+    @filter(variable == "labor")
+    @group_by(year, component)
+    @summarize(value = sum(value))
+    @ungroup
+    @inner_join(
+        _,
+        @chain _ begin
+            @group_by(year)
+            @summarize(den = sum(value))
+            @ungroup
+        end
+    )
+    @mutate(share = value / den)
+    @group_by(component)
+    @summarize(share = mean(share))
+    @ungroup
+    @filter(share ≥ 1e-4)
+    @select(component)
+end
+```
+
+## Contributions by SOC Major Groups
+
+```{julia}
+component_contribution = @chain data_payroll begin
+    @filter(variable == "labor")
+    @group_by(component, year)
+    @summarize(value = sum(value))
+    @ungroup
+    @inner_join(
+        @chain data_payroll begin
+            @filter(variable == "labor")
+            @group_by(year)
+            @summarize(tot = sum(value))
+        end
+    )
+    @select(
+        component,
+        year,
+        share = 100value / tot
+    )
+end
+soc_major = @chain component_contribution begin
+    @mutate(
+        soc_major = SubString(component, 1, 2)
+    )
+    @group_by(soc_major, year)
+    @summarize(value = sum(share))
+    @ungroup
+end
+component_cum = @chain component_contribution begin
+    @arrange(year, desc(share))
+    @group_by(year)
+    @summarize(
+        n = ~eachindex(share),
+        value = cumsum(share)
+    )
+    @group_by(n)
+    @summarize(
+        lb = minimum(value),
+        ub = maximum(value)
+    )
+end
+```
+
+```{julia}
+plt = data(soc_major) *
+    mapping(
+        :year => "Year",
+        :value => "Share (%)",
+        color = :soc_major => renamer(
+            [
+                "11" => "Management",
+                "13" => "Business and Financial",
+                "15" => "Computer and Mathematical",
+                "17" => "Architecture and Engineering",
+                "19" => "Life, Physical, and Social Science",
+                "23" => "Legal",
+                "25" => "Educational Instruction and Library",
+                "27" => "Arts, Design, Entertainment, Sports, and Media",
+                "29" => "Healthcare Practitioners and Technical",
+                "31" => "Healthcare Support",
+                "33" => "Protective Service",
+                "43" => "Office and Administrative Support",
+                "45" => "Farming, Fishing, and Forestry",
+                "47" => "Construction and Extraction",
+                "53" => "Transportation and Material Moving",
+            ]
+        ) => "SOC 2018 Major Group",
+    stack = :soc_major
+    ) *
+    visual(BarPlot)
+fig = draw(
+    plt,
+    scales(
+        Color = (;
+            palette = [
+                RGBAf(230 // 255, 25 // 255, 75 // 255),
+                RGBAf(60 // 255, 180 // 255, 75 // 255),
+                RGBAf(255 // 255, 225 // 255, 25 // 255), 
+                RGBAf(0 // 255, 130 // 255, 200 // 255),
+                RGBAf(245 // 255, 130 // 255, 48 // 255),
+                RGBAf(145 // 255, 30 // 255, 180 // 255),
+                RGBAf(70 // 255, 240 // 255, 240 // 255),
+                RGBAf(240 // 255, 50 // 255, 230 // 255),
+                RGBAf(210 // 255, 245 // 255, 120 // 255),
+                RGBAf(250 // 255, 190 // 255, 212 // 255),
+                RGBAf(0 // 255, 128 // 255, 128 // 255),
+                RGBAf(220 // 255, 190 // 255, 255 // 255),
+                RGBAf(170 // 255, 110 // 255, 40 // 255),
+                RGBAf(255 // 255, 250 // 255, 200 // 255),
+                RGBAf(128 // 255, 0 // 255, 0 // 255),
+                RGBAf(170 // 255, 255 // 255, 195 // 255),
+                RGBAf(128 // 255, 128 // 255, 0 // 255),
+                RGBAf(255 // 255, 215 // 255, 180 // 255),
+                RGBAf(0 // 255, 0 // 255, 128 // 255),
+                RGBAf(128 // 255, 128 // 255, 128 // 255),
+                RGBAf(255 // 255, 255 // 255, 255 // 255),
+                RGBAf(0 // 255, 0 // 255, 0 // 255)
+            ]
+        )
+    ),
+    axis = (;
+        xticks = 2002:2:2024,
+        limits = (2001.5, 2024.5, 0, 100),
+    ),
+    legend = (;
+        position=:top,
+        nbanks = 5,
+        labelsize = 8,
+    ),
+)
+```
+
+```{julia}
+isdir(joinpath(DIR_PRJ, "figs")) || mkdir(joinpath(DIR_PRJ, "figs"))
+save(
+    joinpath(DIR_PRJ, "figs", "soc_major_contribution.eps"),
+    fig
+)
+```
+
+```{julia}
+plt = data(component_cum) *
+    mapping(
+        :n => "Number of occupations",
+        :lb => "Cumulative contribution (%)",
+        :ub => "Cumulative contribution (%)",
+    ) *
+    visual(Rangebars)
+fig = draw(
+    plt,
+    axis = (;
+        xticks = 1:3:64,
+        yticks = 15:5:100,
+        limits = (0.5, 64, 15, 100)
+    )
+)
+```
+
+```{julia}
+save(
+    joinpath(DIR_PRJ, "figs", "cumulative_contribution.eps"),
+    fig
+)
+```
+
+Considering the top half / 35 occupations.
+
+```{julia}
+top_occ = @chain component_contribution begin
+    @arrange(year, desc(share))
+    @group_by(year)
+    @summarize(component, k = ~eachindex(year))
+    @filter(k < 31)
+    @select(component)
+    @distinct
+    @arrange
+end
+CSV.write(
+    joinpath(DIR_PRJ, "data", "component_ttl.tsv"),
+    (
+        @chain component_ttl begin
+            @left_join(@mutate(top_occ, selected = true))
+            @mutate(selected = coalesce(selected, false))
+        end
+    ),
+    delim = '\t'
+)
+```
+
+We explore the historical 1997-2001 period now.
+
+```{julia}
+industry_hist = CSV.read(
+    joinpath(DIR_PRJ, "data", "oews", "timeseries_97_01.tsv"),
+    DataFrame
+)
+```
+
+```{julia}
+presoc_matches = CSV.read(
+    joinpath(DIR_PRJ, "data", "provided", "presoc_matched_comps.tsv"),
+    DataFrame
+)
+```
+
+```{julia}
+industry_97_98 = @chain begin
+    presoc_matches
+    @mutate(occ_code = as_string(occ_code))
+    @bind_rows(DataFrame(occ_code = "0", component = "00-0000"))
+    @inner_join(industry_hist)
+    @group_by(occ_code, naics, year)
+    @summarize(
+        component,
+        tot_emp = tot_emp / length(unique(component)),
+        h_mean
+    )
+    @ungroup
+    @group_by(component, naics, year)
+    @summarize(
+        tot_emp = sum(tot_emp),
+        h_mean = sum(tot_emp * h_mean) / sum(tot_emp)
+    )
+    @ungroup
+end
+```
+
+```{julia}
+occ_component_final = CSV.read(
+	joinpath(DIR_PRJ, "data", "oews", "occ_component_crosswalk.tsv"),
+	DataFrame
+)
+```
+
+```{julia}
+industry_99_01 = @chain industry_hist begin
+    @filter(year ∈ 1999:2001)
+    @inner_join(occ_component_final)
+    @group_by(occ_code, naics, year)
+    @summarize(
+        component,
+        tot_emp = tot_emp / length(unique(component)),
+        h_mean
+    )
+    @ungroup
+    @group_by(component, naics, year)
+    @summarize(
+        tot_emp = sum(tot_emp),
+        h_mean = sum(tot_emp * h_mean) / sum(tot_emp)
+    )
+    @ungroup
+end
+```
+
+```{julia}
+hist_naics = @chain industry_hist begin
+    @bind_rows(industry_99_01)
+    @select(histnaics = naics, naics)
+    @distinct
+    @left_join(@select(naics2ipa, naics, account))
+    @mutate(naics = case_when(
+        ismissing(account) => naics ÷ 10 * 10,
+        true => naics
+        )
+    )
+    @select(-account)
+    @left_join(@select(naics2ipa, naics, account))
+    @distinct
+    @select(naics = histnaics, account)
+end
+```
+
+```{julia}
+timeseries_97_01_acc = @chain industry_97_98 begin
+    @bind_rows(industry_99_01)
+    @inner_join(hist_naics)
+    dropmissing!
+    @group_by(component, account, year)
+    @summarize(
+        tot_emp = sum(tot_emp),
+        h_mean = sum(tot_emp * h_mean) / sum(tot_emp)
+    )
+    @ungroup
+end
+```
+
+```{julia}
+timeseries_97_98_share = @chain timeseries_97_01_acc begin
+    @filter((year ∈ 1997:1998) & (component == "00-0000"))
+    @group_by(account, year)
+    @summarize(
+        tot_emp_den = tot_emp,
+        payroll = sum(tot_emp * h_mean)
+    )
+    @ungroup
+    @inner_join(timeseries_97_01_acc)
+    @select(
+        component,
+        account,
+        year,
+        tot_emp = tot_emp / tot_emp_den,
+        share = tot_emp * h_mean / payroll
+    )
+    @filter(component ≠ "00-0000")
+    @arrange
+end
+```
+
+```{julia}
+timeseries_99_01_share = @chain timeseries_97_01_acc begin
+    @filter(year ∈ 1999:2001)
+    @group_by(account, year)
+    @summarize(
+        tot_emp_den = sum(tot_emp),
+        payroll = sum(tot_emp * h_mean)
+    )
+    @ungroup
+    @inner_join(
+        @filter(timeseries_97_01_acc, year ∈ 1999:2001)
+    )
+    @select(
+        component,
+        account,
+        year,
+        tot_emp = tot_emp / tot_emp_den,
+        share = tot_emp * h_mean / payroll
+    )
+end
+```
+
+```{julia}
+timeseries_97_98_share = @chain timeseries_99_01_share begin
+    @filter(year == 1999)
+    @select(-year)
+    crossjoin(_, DataFrame(year = 1997:1998))
+end
+```
+
+```{julia}
+data_payroll_hist = @chain timeseries_97_98_share begin
+    @bind_rows(timeseries_99_01_share)
+    @inner_join(
+        @select(
+            component_rates,
+            component,
+            refined
+        )
+    )
+    @select(
+        account,
+        component,
+        year,
+        tot_emp = tot_emp * refined / 100,
+        share = share * refined / 100
+    )
+    @filter(share > 0)
+    @inner_join(
+        @chain ilpa_labor begin
+            @mutate(
+                account = case_when(
+                    contains(account, "GF") => "GF",
+                    contains(account, "GSL") => "GSL",
+                    account == "622" => "622HO",
+                    true => account
+                )
+            )
+            @group_by(year, account)
+            @summarize(labor = sum(value))
+            @ungroup
+        end
+    )
+    @select(
+        account,
+        component,
+        year,
+        tot_emp,
+        labor = labor * share
+    )
+end
+```
+
+```{julia}
+data_payroll_hist_ = @chain timeseries_97_98_share begin
+    @bind_rows(timeseries_99_01_share)
+    @filter(year ∈ 1997:2001)
+    @select(-tot_emp)
+    @pivot_wider(names_from = year, values_from = share)
+end
+```
+
+# Full production cost adjustment factor
+
+We use the representative industries NAICS 518-519 (514) and NAICS 5415.
+
+```{julia}
+fpcaf = @chain CSV.read(
+    joinpath(DIR_PRJ, "data", "fpcaf.tsv"),
+    DataFrame
+) begin
+    @bind_rows(
+        _,
+        DataFrame(
+            year = last(_.year) + 1,
+            fpcaf = last(_.fpcaf)
+        )
+    )
+    @distinct
+end
+```
+
+The fpcafs use a 10-years lagged simple trimmed moving average to smooth the changes.
+
+```{julia}
+plt = data(fpcaf) *
+    mapping(
+        :year => "",
+        :fpcaf => "Full production cost adjustment factor"
+    ) *
+    visual(Scatter)
+fig = draw(
+    plt,
+    axis = (;
+        xticks = 1997:2:2024,
+        yticks = 1.5:0.25:2.5,
+        xticklabelrotation = π / 4,
+        limits = (1996.5, 2024.5, 1.5, 2.25),
+    ),
+)
+save(
+    joinpath(DIR_PRJ, "figs", "fpcaf.eps"),
+    fig
+)
+fig
+```
+
+# Nominal investment
+
+```{julia}
+gfcf = @chain data_payroll begin
+    @pivot_wider(
+        names_from = variable,
+        values_from = value
+    )
+    @rename(tot_emp = employment_share)
+    @bind_rows(data_payroll_hist)
+    @inner_join(@select(fpcaf, year, fpcaf))
+    @select(
+        account,
+        component,
+        year,
+        tot_emp,
+        labor,
+        gfcf = labor * fpcaf
+    )
+    @arrange
+end
+```
+
+We save the detailed table of the investment and the unit of labor.
+
+```{julia}
+CSV.write(
+    joinpath(DIR_PRJ, "data", "gfcf.tsv"),
+    gfcf,
+    delim = '\t'
+)
+```
