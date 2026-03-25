@@ -1,0 +1,1171 @@
+---
+title: "OEWS"
+author:
+  - id: jbsc
+    given: José Bayoán
+    family: Santiago Calderón
+    orcid: 0000-0002-8406-6175
+    email: Jose.Santiago-Calderon@bea.gov
+    degrees:
+      - PhD
+    affiliations:
+      - name: Bureau of Economic Analysis
+    group: Analysis and Research Group
+    department: National Economic Accounts
+    city: Suitland
+    state: MD
+    country: USA
+    postal-code: 20746
+    url: https://www.bea.gov
+    ror: https://ror.org/03b17a012
+    ringgold: 17145
+    isni: 0000000101060898
+    attributes:
+      corresponding: true   
+      roles:
+      # conceptualization:
+      - data curation: lead
+      - analysis: lead
+      # funding:
+      - investigation: lead
+      - methodology: lead
+      # project administration
+      # resources
+      - software: lead
+      # supervision
+      # validation
+      - visualization: lead
+      - writing: lead
+      - editing: lead
+date: today
+date-format: iso
+format:
+  html: 
+    code-fold: true
+    self-contained: true
+    smooth-scroll: true
+    html-math-method: katex
+bibliography: ../references.bib
+engine: julia
+abstract: |
+  This script examines the occupation groups reported by the Occupation Employment and Wages Statistics (OEWS). It examines the national industry-specific and by ownership (when available) from 1997--2024. It uses graph theory to identify the most detailed units for which a time series can be developed by understanding how different occupations might be reported jointly throughout the series. It then finds the employment numbers and average annual wages and salaries for each occupational group.
+keywords:
+  - Sum of cost
+  - Own account
+  - IPPs
+license:
+  text: >
+    A work of the United States Government (17 U.S.C. § 105).
+  type: open-access
+  url: https://www.copyright.gov/title17/92chap1.html#105.
+---
+
+We first instantiate the environment.
+
+```{julia}
+const DIR_PRJ = string(strip(read(`git rev-parse --show-toplevel`, String)))
+using Pkg
+Pkg.activate(DIR_PRJ)
+Pkg.instantiate() # Run this line if running the code for the first time as needed.
+# Pkg.build("PyCall")
+```
+
+We call the packages that will be used in the script.
+
+```{julia}
+using Base: Fix2
+using Dates: Dates, year
+using CSV, DataFrames, TidierData
+using ExcelFiles: ExcelFiles, openxl, readxl, load
+using XLSX: XLSX, readtable
+using HTTP: HTTP, URI, request
+using unzip_jll: unzip
+using Graphs
+```
+
+# OEWS data
+
+## OEWS tables
+
+We first collect the *National Occupational Employment and Wage Estimates* from the [Occupational Employment and Wage Statistics](https://www.bls.gov/oes/tables.htm) tables from 1997 -- 2023.
+
+::: {.callout-warning}
+BLS.gov does not allow programatic access to the data files anymore and the data is not available through their API. One must manually download each file.
+:::
+
+::: {.callout-note}
+We will focus on 2002--2023, but will download data starting with 1997.
+:::
+
+We download the files if we don't have those saved to the directory.
+
+```{julia}
+isdir(joinpath(DIR_PRJ, "data")) || mkdir(joinpath(DIR_PRJ, "data"))
+isdir(joinpath(DIR_PRJ, "data", "oews")) || mkdir(joinpath(DIR_PRJ, "data", "oews"))
+```
+
+Download the National industry-specific from https://www.bls.gov/oes/tables.htm.
+
+We inflate the ZIP files.
+
+```{julia}
+for file in readdir(joinpath(DIR_PRJ, "data", "oews"))
+	if contains(file, r"\d{2}in.*zip$")
+		yr = parse(Int, match(r"\d{2}(?=in)", file).match)
+		dir = if yr ∈ 12:50
+			joinpath(DIR_PRJ, "data", "oews")
+		else
+			joinpath(DIR_PRJ, "data", "oews", replace(file, ".zip" => ""))
+		end
+		isdir(dir) || mkdir(dir)
+		if (
+			yr ≥ 12 &&
+			!isdir(joinpath(DIR_PRJ, "data", "oews", replace(file, ".zip" => "")))
+			) || isempty(readdir(dir))
+			infile = joinpath(DIR_PRJ, "data", "oews", file)
+			run(`$(unzip()) $infile -d $dir`)
+		end
+	end
+end
+```
+
+## Crosswalks
+
+We access the crosswalk for the 2010 and 2011 special taxonomy.
+
+```{julia}
+# if !isfile(joinpath(DIR_PRJ, "data", "oews", "2010_and_2011_oes_classification.xls"))
+# 	response = request(
+# 		"GET",
+# 		URI(
+# 			scheme = "https",
+# 			host = "www.bls.gov",
+# 			path = "/oes/2010_and_2011_oes_classification.xls"
+# 		)
+# 	)
+# 	write(
+# 		joinpath(DIR_PRJ, "data", "oews", "2010_and_2011_oes_classification.xls"),
+# 		response.body
+# 	)
+# end
+```
+
+We acccess the published crosswalk from 2010 to the 2019 taxonomy.
+
+```{julia}
+# if !isfile(joinpath(DIR_PRJ, "data", "oews", "oes_2019_hybrid_structure.xlsx"))
+# 	response = request(
+# 		"GET",
+# 		URI(
+# 			scheme = "https",
+# 			host = "www.bls.gov",
+# 			path = "/oes/oes_2019_hybrid_structure.xlsx"
+# 		)
+# 	)
+# 	write(
+# 		joinpath(DIR_PRJ, "data", "oews", "oes_2019_hybrid_structure.xlsx"),
+# 		response.body
+# 	)
+# end
+```
+
+## Reading the Occupational Data
+
+The following function reads the national industry and by ownership files as applicable from 2002--2023. The 2002 release is the first one that uses the NAICS industry classication (prior releases use the Standard Industry Classication SIC). There are various changes to the file structures including the ownership information between private and public for the education and healthcare sectors which starts on 2009.
+
+```{julia}
+function parse_industry(yr::Integer)
+    dir = filter!(
+        x -> isdir(joinpath(DIR_PRJ, "data", "oews", x)) &&
+            contains(x, Regex(string(lpad(yr, 2, '0'), "(?=in(3|4))"))),
+        readdir(joinpath(DIR_PRJ, "data", "oews"))
+    ) |> only
+    file = filter!(
+        file -> !startswith(file, ".~lock.") && contains(file, "nat3d"),
+        readdir(joinpath(DIR_PRJ, "data", "oews", dir))
+    )
+    nat3 = if !isempty(file)
+        file = first(file)
+        nat3 = if endswith(file, "xls")
+            xf = openxl(joinpath(DIR_PRJ, "data", "oews", dir, file))
+            sn = first(xf.workbook.sheet_names())
+            ssr = findfirst(
+                Fix2(isa, Union{AbstractString,Real}),
+                vec(readxl(xf, string(sn, "!A1:A100")))
+            ) - 1
+            load(
+                joinpath(DIR_PRJ, "data", "oews", dir, file),
+                sn,
+                skipstartrows=ssr > 1 ? ssr : :blanks,
+            ) |> DataFrame
+        else
+            DataFrame(readtable(joinpath(DIR_PRJ, "data", "oews", dir, file), 1))
+        end
+        rename!(nat3, names(nat3) .=> uppercase.(names(nat3)))
+        select!(
+            nat3,
+            intersect(
+                [
+                    "OCC_CODE", "NAICS", "TOT_EMP", "H_MEAN", "OCC_TITLE"
+                ],
+                names(nat3)
+            )
+        )
+    else
+        DataFrame()
+    end
+    file = filter!(
+        file -> !startswith(file, ".~lock.") && contains(file, "nat4d"),
+        readdir(joinpath(DIR_PRJ, "data", "oews", dir))
+    )
+    nat4 = if !isempty(file)
+        file = first(filter(!contains("owner"), file))
+        nat4 = if endswith(file, "xls")
+            xf = openxl(joinpath(DIR_PRJ, "data", "oews", dir, file))
+            sn = first(xf.workbook.sheet_names())
+            ssr = findfirst(
+                Fix2(isa, Union{AbstractString,Real}),
+                vec(readxl(xf, string(sn, "!A1:A100")))
+            ) - 1
+            load(
+                joinpath(DIR_PRJ, "data", "oews", dir, file),
+                sn,
+                skipstartrows=ssr > 1 ? ssr : :blanks,
+            ) |> DataFrame
+        else
+            DataFrame(readtable(joinpath(DIR_PRJ, "data", "oews", dir, file), 1))
+        end
+        rename!(nat4, names(nat4) .=> uppercase.(names(nat4)))
+        select!(
+            nat4,
+            intersect(
+                [
+                    "OCC_CODE", "NAICS", "TOT_EMP", "H_MEAN", "OCC_TITLE"
+                ],
+                names(nat4)
+            )
+        )
+    else
+        DataFrame()
+    end
+    file = filter!(
+        file -> !startswith(file, ".~lock.") && contains(file, r"nat3d.*owner"),
+        readdir(joinpath(DIR_PRJ, "data", "oews", dir))
+    )
+    nat3_own = if !isempty(file)
+        file = first(file)
+        nat3_own = if endswith(file, "xls")
+            xf = openxl(joinpath(DIR_PRJ, "data", "oews", dir, file))
+            sn = first(xf.workbook.sheet_names())
+            ssr = findfirst(
+                Fix2(isa, Union{AbstractString,Real}),
+                vec(readxl(xf, string(sn, "!A1:A100")))
+            ) - 1
+            load(
+                joinpath(DIR_PRJ, "data", "oews", dir, file),
+                sn,
+                skipstartrows=ssr > 1 ? ssr : :blanks,
+            ) |> DataFrame
+        else
+            DataFrame(readtable(joinpath(DIR_PRJ, "data", "oews", dir, file), 1))
+        end
+        rename!(nat3_own, names(nat3_own) .=> uppercase.(names(nat3_own)))
+        if "OWNERSHIP" ∈ names(nat3_own)
+            nat3_own = @chain nat3_own begin
+                @mutate(OWN = case_when(
+                    OWNERSHIP == "Federal Government" => "1",
+                    OWNERSHIP == "State government" => "2",
+                    OWNERSHIP == "Local government" => "3",
+                    OWNERSHIP == "Private" => "5",
+                    true => OWNERSHIP
+                )
+                )
+            end
+        else
+            nat3_own = @chain nat3_own begin
+                @rename(OWN = OWN_CODE)
+            end
+        end
+        select!(
+            nat3_own,
+            intersect(
+                [
+                    "OCC_CODE", "NAICS", "OWN", "TOT_EMP", "H_MEAN", "OCC_TITLE"
+                ],
+                names(nat3_own)
+            )
+        )
+    else
+        DataFrame()
+    end
+    file = filter!(
+        file -> !startswith(file, ".~lock.") && contains(file, r"nat4d.*owner"),
+        readdir(joinpath(DIR_PRJ, "data", "oews", dir))
+    )
+    nat4_own = if !isempty(file)
+        file = first(file)
+        nat4_own = if endswith(file, "xls")
+            xf = openxl(joinpath(DIR_PRJ, "data", "oews", dir, file))
+            sn = first(xf.workbook.sheet_names())
+            ssr = findfirst(
+                Fix2(isa, Union{AbstractString,Real}),
+                vec(readxl(xf, string(sn, "!A1:A100")))
+            ) - 1
+            load(
+                joinpath(DIR_PRJ, "data", "oews", dir, file),
+                sn,
+                skipstartrows=ssr > 1 ? ssr : :blanks,
+            ) |> DataFrame
+        else
+            DataFrame(readtable(joinpath(DIR_PRJ, "data", "oews", dir, file), 1))
+        end
+        rename!(nat4_own, names(nat4_own) .=> uppercase.(names(nat4_own)))
+        if "OWNERSHIP" ∈ names(nat4_own)
+            nat4_own = @chain nat4_own begin
+                @mutate(OWN = case_when(
+                    OWNERSHIP == "Federal Government" => "1",
+                    OWNERSHIP == "State government" => "2",
+                    OWNERSHIP == "Local government" => "3",
+                    OWNERSHIP == "Private" => "5",
+                    true => OWNERSHIP
+                )
+                )
+            end
+        else
+            nat4_own = @chain nat4_own begin
+                @rename(OWN = OWN_CODE)
+            end
+        end
+        select!(
+            nat4_own,
+            intersect(
+                [
+                    "OCC_CODE", "NAICS", "TOT_EMP", "H_MEAN", "OCC_TITLE", "OWN"
+                ],
+                names(nat4_own)
+            )
+        )
+    else
+        DataFrame()
+    end
+    if !isempty(nat3_own)
+        nat3 = @chain nat3 begin
+            @mutate(OWN = "")
+            @filter(!startswith(NAICS, r"6(11|22)"))
+        end
+    else
+        nat3 = @chain nat3 begin
+            @mutate(OWN = "")
+        end
+    end
+    if !isempty(nat4_own)
+        nat4 = @chain nat4 begin
+            @mutate(OWN = "")
+            @filter(!startswith(NAICS, r"6(11|22)"))
+        end
+    else
+        nat4 = @chain nat4 begin
+            @mutate(OWN = "")
+        end
+    end
+    output = vcat(nat3, nat4, nat3_own, nat4_own, cols=:union)
+    output = @chain output begin
+        @mutate(NAICS = as_integer(SubString(NAICS, 1, 4)))
+    end
+    output[!, :YEAR] .= yr ≤ rem(year(Dates.today()), 1_000) ? 2000 + yr : 1900 + yr
+    output = @chain output begin
+        @mutate(
+            OCC_CODE = as_string(OCC_CODE),
+            H_MEAN = as_float(H_MEAN),
+            TOT_EMP = as_integer(TOT_EMP),
+        )
+    end
+    output = @chain output begin
+        @arrange(OCC_CODE, NAICS, OWN, desc(TOT_EMP))
+        @group_by(OCC_CODE, NAICS, OWN)
+        combine(_) do subdf
+            idx = something(findfirst(!ismissing, subdf[!, :TOT_EMP]), 1)
+            subdf[idx:idx, :]
+        end
+    end
+    select!(
+        output,
+        intersect(
+            names(output),
+            [
+                "YEAR", "NAICS", "OCC_CODE", "TOT_EMP", "H_MEAN", "OCC_TITLE", "OWN"
+            ]
+        )
+    )
+    rename!(output, names(output) .=> lowercase.(names(output)))
+    unique!(output)
+end
+```
+
+We save the parsed file for convenience access and read it subsequently.
+
+```{julia}
+for yr in 2:24
+    filepath = joinpath(DIR_PRJ, "data", "oews", "industry$(lpad(yr, 2, '0')).tsv")
+    if !isfile(filepath)
+        println("Parsing and saving data for year $yr...")
+        tbl = parse_industry(yr)
+        CSV.write(
+            filepath,
+            tbl,
+            delim='\t'
+        )
+    end
+end
+industry = reduce(
+    vcat,
+    CSV.read(joinpath(DIR_PRJ, "data", "oews", "industry$(lpad(yr, 2, '0')).tsv"), DataFrame)
+    for yr in 2:24
+)
+```
+
+We code the ownership classification for the pre-2009 files to indicate that those are presumed to all be private sector absent information.
+
+```{julia}
+complete_obs = @chain industry begin
+	@mutate(own = coalesce(own, 0))
+	dropmissing!
+end
+```
+
+## Applying the Crosswalks
+
+We read the various crosswalks.
+
+```{julia}
+soc00_oes10 = DataFrame(
+	load(
+	joinpath(DIR_PRJ, "data", "oews", "2010_and_2011_oes_classification.xls"),
+	"OES use of combined SOC data!A10:G837"
+	)
+)
+```
+
+```{julia}
+hybrid = DataFrame(
+    readtable(
+        joinpath(DIR_PRJ, "data", "oews", "oes_2019_hybrid_structure.xlsx"),
+        1,
+        first_row=5,
+        infer_eltypes=true
+    )
+)
+```
+
+```{julia}
+soc_oes = @chain hybrid begin
+    @select(
+        soc18 = as_string(`2018 SOC Code `),
+        oes18 = as_string(`OES 2018 Estimates Code`),
+        oes19 = as_string(`OES 2019 Estimates Code`),
+    )
+end
+```
+
+```{julia}
+soc00_soc10 = @chain soc00_oes10 begin
+    @select(
+        soc00 = as_string(`2000 SOC code`),
+        soc10 = `2010 SOC code`
+    )
+    dropmissing!
+end
+```
+
+```{julia}
+soc10_soc18 = @chain hybrid begin
+    @select(
+        soc10 = as_string(`2010 SOC Code`),
+        soc18 = as_string(`2018 SOC Code `)
+    )
+    dropmissing!
+end
+```
+
+We combine the various crosswalks into a singular crosswalk to use.
+
+```{julia}
+soc = @chain soc00_soc10 begin
+    @left_join(soc10_soc18)
+    @select(occ_code = soc00, soc18)
+    dropmissing!
+    @bind_rows(
+        @chain soc00_soc10 begin
+            @left_join(soc10_soc18)
+            @select(occ_code = soc00, soc18)
+        end
+    )
+    @bind_rows(
+        @chain soc00_oes10 begin
+            @select(
+                occ_code = `OES 2010 code`,
+                soc10 = `2010 SOC code`
+            )
+            @inner_join(soc10_soc18)
+            @select(occ_code, soc18)
+        end
+    )
+    @bind_rows(
+        @chain soc10_soc18 begin
+            @select(occ_code = soc10, soc18)
+        end
+    )
+    @bind_rows(
+        @chain soc10_soc18 begin
+            @select(occ_code = soc18, soc18)
+        end
+    )
+    @bind_rows(
+        @chain soc_oes begin
+            @select(occ_code = oes18, soc18)
+        end
+    )
+    @bind_rows(
+        @chain soc_oes begin
+            @select(occ_code = oes19, soc18)
+        end
+    )
+    dropmissing!
+    @distinct
+    @arrange
+end
+```
+
+We then look at the occupation code and title for the latest taxonomy (2023).
+
+```{julia}
+oes24 = @chain complete_obs begin
+    @filter(year == 2024)
+    @select(
+        oes24_ttl = replace(titlecase(occ_title), "*" => ""),
+        occ_code,
+        oes24 = occ_code,
+    )
+    @arrange
+    @distinct(oes24_ttl)
+end
+```
+
+We also look at all the different occupation codes and titles through all the considered taxonomies.
+
+```{julia}
+all_unique_codes = @chain complete_obs begin
+    @select(occ_code, occ_ttl = replace(titlecase(occ_title), "*" => ""))
+    @mutate(
+        strata = case_when(
+            endswith.(occ_code, "000") .=> 1,
+            endswith.(occ_code, "00") .=> 2,
+            endswith.(occ_code, "0") .=> 3,
+            true .=> 4
+        )
+    )
+    @arrange
+    @distinct(occ_code)
+end
+```
+
+Adjustment for detailed and minor being the same.
+
+```{julia}
+broad_detailed = @chain complete_obs begin
+    @select(occ_code = occ_code, occ_title)
+    @distinct
+    @filter(endswith(occ_code, r"[^0]0$"))
+    @inner_join(
+        @chain complete_obs begin
+            @select(detailed = occ_code, occ_title)
+            @distinct
+        end
+    )
+end
+```
+
+This uses the Standard Occupation Classification (SOC) 2018 taxonomy is the basis for mapping to the latest taxonomy (2024).
+
+```{julia}
+oes24_soc18 = @chain oes24 begin
+    @left_join(
+        @select(broad_detailed, occ_code, detailed)
+    )
+    @mutate(detailed = coalesce(detailed, occ_code))
+    @left_join(
+        @chain hybrid begin
+            @select(
+                soc18_from_oes19ttl = as_string(`2018 SOC Code `),
+                oes24_ttl = as_string(`OES 2019 Estimates Title`)
+            )
+        end
+    )
+    @left_join(
+        @chain hybrid begin
+            @select(
+                soc18_from_soc18ttl = as_string(`2018 SOC Code `),
+                oes24_ttl = as_string(`2018 SOC Title`)
+            )
+        end
+    )
+    @left_join(
+        @chain hybrid begin
+            @select(
+                soc18_from_broad = as_string(`2018 SOC Code `),
+                detailed = as_string(`OES 2019 Estimates Code`)
+            )
+        end
+    )
+    @left_join(
+        @chain hybrid begin
+            @select(
+                occ_code = as_string(`2018 SOC Code `),
+                soc18 = as_string(`2018 SOC Code `)
+            )
+			@distinct
+        end
+    )
+    @group_by(oes24)
+    combine(_) do subdf
+        DataFrame(
+            oes24=subdf[1, :oes24],
+            oes24_ttl=subdf[1, :oes24_ttl],
+            soc=sort!(
+                unique(
+                    vcat(
+                        subdf[!, :soc18_from_oes19ttl],
+                        subdf[!, :soc18_from_soc18ttl],
+                        subdf[!, :soc18_from_broad],
+						subdf[!, :soc18]
+                    )
+                )
+            )
+        ) |> dropmissing!
+    end
+    @arrange
+end
+```
+
+All occupation codes are matched to a SOC18 with the corresponding reporting occupation codes.
+
+```{julia}
+first_stage = @chain all_unique_codes begin
+    @left_join(oes24)
+    rename(:oes24 => :oes_match)
+    @select(-oes24_ttl)
+    @left_join(@select(oes24, occ_ttl = oes24_ttl, ttl_match = oes24))
+    @left_join(
+        @chain soc begin
+            @select(occ_code, soc = soc18)
+            @inner_join(oes24_soc18)
+            @select(occ_code, soc_match = oes24)
+        end
+    )
+    @mutate(best_match = coalesce(oes_match, ttl_match, soc_match))
+    @select(occ_code, occ_ttl, strata, best_match)
+    dropmissing!
+    @arrange
+    @distinct
+    @filter(contains(occ_code, '-'))
+end
+second_stage = @chain first_stage begin
+    @left_join(@select(oes24_soc18, best_match = oes24, soc_oes = soc))
+    @left_join(@select(oes24_soc18, best_match = soc, soc_soc = soc))
+    @mutate(soc = coalesce(soc_oes, soc_soc))
+    @select(occ_code, occ_ttl, strata, soc)
+    dropmissing!
+    @distinct
+    @arrange
+end
+```
+
+## Graph
+
+We construct a directed graph from occupation codes to the SOC 2018. When mutiple occupations are reported using a combination of SOC 2018 corresponding occupation codes, these will make a subcomponent of the graph.
+
+```{julia}
+edgelst = @chain second_stage begin
+    @filter(contains(occ_code, r"^\d{2}\-\d{4}$"))
+    @filter(!endswith(soc, '9'))
+    @select(occ_code, soc)
+    @inner_join(
+        @select(hybrid, soc = `2018 SOC Code `, soc_ttl = as_string(`2018 SOC Title`))
+    )
+end
+```
+
+The following function traverses the graph and identifies the subcomponents (every connected node to each other).
+
+```{julia}
+function find_subcomponents(edgelst)
+    nodes = reduce(
+                vcat,
+                eachcol(select(edgelst, [:occ_code, :soc]))
+            ) |> unique! |> sort!
+    node_kv = Dict(enumerate(nodes))
+    kv_node = Dict(v => k for (k, v) in node_kv)
+    graph = SimpleDiGraph(length(nodes))
+    for row in eachrow(edgelst)
+        add_edge!(
+            graph,
+            kv_node[row.occ_code],
+            kv_node[row.soc]
+        )
+    end
+    components = weakly_connected_components(graph)
+    soc18_components = DataFrame()
+    for (idx, component) in enumerate(components)
+        append!(
+            soc18_components,
+            DataFrame(
+                soc=get.(Ref(node_kv), component, nothing),
+                component=idx
+            )
+        )
+    end
+    @chain soc18_components begin
+        @inner_join(
+            @select(hybrid, soc = `2018 SOC Code `, soc_ttl = as_string(`2018 SOC Title`))
+        )
+        @distinct
+        @group_by(component)
+        @summarize(soc = soc, occ_ttl = ~join(soc_ttl, "; "))
+    end
+end
+soc_components = find_subcomponents(edgelst)
+oes_components = @chain soc_components begin
+    @inner_join(oes24_soc18)
+    @select(component, oes24, oes24_ttl)
+    @distinct
+    @group_by(component)
+    @summarize(oes24 = oes24, occ_ttl = ~join(oes24_ttl, " | "))
+    @distinct
+    @arrange
+end
+occ_components = @chain all_unique_codes begin
+    @filter(contains(occ_code, '-'))
+    @select(occ_code, strata)
+    @inner_join(soc)
+    @inner_join(rename(oes24_soc18, :soc => :soc18))
+    @inner_join(oes_components)
+end
+final_edgelst = @chain occ_components begin
+    @select(soc = occ_code, component = as_string(component))
+    dropmissing!
+end
+nodes = reduce(
+            vcat,
+            eachcol(final_edgelst)
+        ) |> unique! |> sort!
+node_kv = Dict(enumerate(nodes))
+kv_node = Dict(v => k for (k, v) in node_kv)
+graph = SimpleDiGraph(length(nodes))
+for row in eachrow(final_edgelst)
+    add_edge!(
+        graph,
+        kv_node[row.soc],
+        kv_node[row.component]
+    )
+end
+components_factors = weakly_connected_components(graph)
+final_components = DataFrame()
+for (idx, component) in enumerate(components_factors)
+    append!(
+        final_components,
+        DataFrame(
+            soc=get.(Ref(node_kv), component, nothing),
+            component=idx
+        )
+    )
+end
+final_components = @chain final_components begin
+    @filter(contains(soc, '-'))
+    @select(occ_code = soc, occ_component = component)
+end
+```
+
+The components are identified as all SOC 2018 related occupations that at some point were reported jointly throughout the releases.
+
+Using these components, we aggregate to a common unit by computing the payroll as `tot_emp` * `h_mean` and summing the `tot_emp`. A new `h_mean` is computed by dividing the new `payroll` by the combined `tot_emp`. This is done for the the various observations by `year`, `ownership` (e.g., private, public), `industry` (i.e., NAICS3/NAICS4), and `component` (i.e., graph subcomponent of the occupation codes).
+
+```{julia}
+time_series = @chain complete_obs begin
+    @filter(contains(occ_code, '-'))
+    @inner_join(@select(final_components, occ_code, occ_component, broad = SubString(occ_code, 1, 6)))
+    @distinct
+    @group_by(broad, own, year)
+    combine(_) do subdf
+        if any(endswith("0"), subdf[!, :occ_code])
+            @filter(subdf, endswith(occ_code, "0"))
+        else
+            subdf
+        end
+    end
+    @ungroup
+    @select(-broad)
+    @mutate(payroll = tot_emp * h_mean)
+    @group_by(occ_component, naics, own, year)
+    combine(_) do subdf
+        @chain subdf begin
+            @arrange(desc(tot_emp))
+            @distinct(occ_code)
+            @summarize(
+                payroll = sum(payroll),
+                tot_emp = sum(tot_emp),
+                occ_ttl = ~join(~sort(~unique(occ_title)), "; ")
+            )
+            @mutate(h_mean = payroll / tot_emp)
+            @select(tot_emp, h_mean, payroll, occ_ttl)
+        end
+    end
+end
+```
+
+We present the results in a convenient and self-contained format.
+
+```{julia}
+output = @chain time_series begin
+	@inner_join(final_components)
+	@inner_join(@select(second_stage, occ_code, soc))
+	@select(soc, occ_component)
+	@distinct
+	@arrange
+end
+```
+
+We use the SOC codes as the ID for the subcomponents.
+
+```{julia}
+mapper_from_occ_component_to_soc = @chain final_components begin
+    @inner_join(@select(second_stage, occ_code, soc))
+    @select(soc, occ_component)
+    @distinct(soc, occ_component)
+    @arrange(occ_component, soc)
+    @group_by(occ_component)
+    @summarize(soc = ~join(soc, " | "))
+end
+```
+
+Lastly, we attach the occupation titles as well.
+
+```{julia}
+final_output = @chain time_series begin
+    @inner_join(mapper_from_occ_component_to_soc)
+    @select(
+        component = soc, naics, own, year, tot_emp,
+        h_mean = round(h_mean, digits=2), payroll = as_integer(round(payroll)), occ_ttl
+    )
+end
+```
+
+We save for the record the mapping from occupation code to component.
+
+```{julia}
+occ_component_final = @chain final_components begin
+	@inner_join(mapper_from_occ_component_to_soc)
+	@select(occ_code, component = soc)
+	@distinct
+end
+```
+
+We save the mapping.
+
+```{julia}
+CSV.write(
+	joinpath(DIR_PRJ, "data", "oews", "occ_component_crosswalk.tsv"),
+	occ_component_final,
+	delim = '\t'
+)
+```
+
+We save the final occupational employement, wages and salaries, by industry and ownership annual data from 2002--2023.
+
+```{julia}
+CSV.write(
+	joinpath(DIR_PRJ, "data", "oews", "timeseries_02_12.tsv"),
+	@filter(final_output, year ∈ 2002:2012),
+	delim = '\t'
+)
+```
+
+```{julia}
+CSV.write(
+	joinpath(DIR_PRJ, "data", "oews", "timeseries_13_24.tsv"),
+	@filter(final_output, year ∈ 2013:2024),
+	delim = '\t'
+)
+```
+
+# Historical
+
+We now work with 1997 -- 2001 to backast a reasonable estimate.
+
+Since the files use the Standard Industry Classification (SIC), we obtain the [SIC to NAICS 2002 Employment Ratios for 3‐Digit SIC Series](https://www.bls.gov/ces/naics/sic-3-digit-to-naics-2002-ratios.htm).
+
+```{julia}
+sic_naics = @chain CSV.read(
+    joinpath(DIR_PRJ, "data", "oews", "SIC to NAICS 2002 Employment Ratios for 3‐Digit SIC Series.tsv"),
+    DataFrame
+) begin
+    @select(
+        sic = SubString(as_string(`CES SIC Tabulating Code`), 4, 6),
+        naics = SubString(as_string(`CES NAICS Tabulating Code`), 4, 7),
+        ratio = as_float(`SIC to NAICS Employment Ratio`)
+    )
+end
+```
+
+```{julia}
+function parse_industry_97_01(yr::Integer)
+    dir = filter!(
+        x -> isdir(joinpath(DIR_PRJ, "data", "oews", x)) &&
+            contains(x, Regex(string(lpad(yr, 2, '0'), "(?=in(3|4))"))),
+        readdir(joinpath(DIR_PRJ, "data", "oews"))
+    ) |> only
+    file = filter!(
+        file -> !startswith(file, ".~lock.") && contains(file, "nat3d"),
+        readdir(joinpath(DIR_PRJ, "data", "oews", dir))
+    ) |> only
+    nat3 = begin
+        xf = openxl(joinpath(DIR_PRJ, "data", "oews", dir, file))
+        sn = first(xf.workbook.sheet_names())
+        ssr = findfirst(
+            Fix2(isa, Union{AbstractString,Real}),
+            vec(readxl(xf, string(sn, "!A1:A100")))
+        ) - 1
+        load(
+            joinpath(DIR_PRJ, "data", "oews", dir, file),
+            sn,
+            skipstartrows=ssr > 1 ? ssr : :blanks,
+        ) |> DataFrame
+    end
+    rename!(nat3, names(nat3) .=> uppercase.(names(nat3)))
+    "OCC_TITL" ∈ names(nat3) && rename!(nat3, "OCC_TITL" => "OCC_TITLE") # The 2000 file.
+    select!(
+        nat3,
+        intersect(
+            [
+                "OCC_CODE", "SIC", "TOT_EMP", "H_MEAN", "OCC_TITLE", "YEAR"
+            ],
+            names(nat3)
+        )
+    )
+    output = @chain nat3 begin
+        @mutate(
+            SIC = SubString(as_string(SIC), 1, 3),
+            OCC_CODE = as_string(OCC_CODE),
+            H_MEAN = as_float(H_MEAN),
+            TOT_EMP = as_integer(TOT_EMP),
+            YEAR = as_integer(YEAR)
+        )
+        dropmissing!
+    end
+    rename!(output, names(output) .=> lowercase.(names(output)))
+end
+```
+
+```{julia}
+for yr in vcat(97:99, 0:1)
+    filepath = joinpath(
+        DIR_PRJ, "data", "oews", "industry$(lpad(yr, 2, '0')).tsv"
+    )
+    if !isfile(filepath)
+        tbl = parse_industry_97_01(yr)
+        CSV.write(
+            filepath,
+            tbl,
+            delim='\t'
+        )
+    end
+end
+industry_hist = reduce(
+    vcat,
+    CSV.read(
+        joinpath(DIR_PRJ, "data", "oews", "industry$(lpad(yr, 2, '0')).tsv"),
+        DataFrame
+    ) for yr in vcat(97:99, 0:1)
+)
+```
+
+We also need to match the OES codes pre-SOC to SOC using the [crosswalk](https://data.widcenter.org/download/soc1998/socoes98.xls) (based on https://www.widcenter.org/document/legacy-crosswalks/).
+
+```{julia}
+if !isfile(joinpath(DIR_PRJ, "data", "oews", "socoes98.xls"))
+    response = request(
+        "GET",
+        URI(
+            scheme="https",
+            host="data.widcenter.org",
+            path="/download/soc1998/socoes98.xls"
+        )
+    )
+    write(
+        joinpath(DIR_PRJ, "data", "oews", "socoes98.xls"),
+        response.body
+    )
+end
+```
+
+```{julia}
+socoes98 = @chain DataFrame(
+        load(
+	        joinpath(DIR_PRJ, "data", "oews", "socoes98.xls"),
+	        "OES to SOC",
+	        )
+    ) begin
+    @select(
+        occ_code = as_string(oescode),
+        soc = as_string(soccode)
+    )
+	@bind_rows(
+		@chain DataFrame(
+        	load(
+	        	joinpath(DIR_PRJ, "data", "oews", "socoes98.xls"),
+	        	"OES to SOC",
+	        )
+    	) begin
+			@select(
+				occ_code = as_string(oes99code),
+				soc = as_string(soccode)
+			)
+		end
+	)
+	dropmissing!
+    @distinct
+end
+```
+
+```{julia}
+begin
+    filepath = joinpath(DIR_PRJ, "data", "occ_code_hist.tsv")
+    if !isfile(filepath)
+        occ_code_hist = @chain industry_hist begin
+		    @select(occ_code, occ_title = lowercase(occ_title), year)
+		    @distinct
+		    @left_join(socoes98)
+		    @left_join(
+			    @chain hybrid begin
+				    @select(
+					    occ_title = lowercase(as_string(`2018 SOC Title`)),
+					    soc18 = as_string(`2018 SOC Code `)
+				    )
+			    end
+		    )
+		    @left_join(
+			    @chain hybrid begin
+				    @select(
+					    occ_title = lowercase(as_string(`OES 2019 Estimates Title`)),
+					    soc18_oes19 = as_string(`2018 SOC Code `)
+				    )
+			    end
+		    )
+		    @left_join(
+			    @chain hybrid begin
+				    @select(
+					    occ_title = lowercase(as_string(`OES 2018 Estimates Title`)),
+					    soc18_oes18 = as_string(`2018 SOC Code `)
+				    )
+			    end
+		    )
+		    @left_join(
+			    @chain hybrid begin
+				    @select(
+					    occ_title = lowercase(as_string(`2010 SOC Title`)),
+					    soc18_soc10 = as_string(`2018 SOC Code `)
+				    )
+			    end
+		    )
+		    @mutate(
+			    match = coalesce(
+				    soc18, soc18_oes19, soc18_oes18, soc18_soc10, soc
+			    )
+		    )
+        end
+        CSV.write(filepath, occ_code_hist, delim = '\t')
+    end
+end
+occ_code_hist = CSV.read(joinpath(DIR_PRJ, "data", "occ_code_hist.tsv"), DataFrame)
+```
+
+```{julia}
+manual_presoc = @chain CSV.read(
+	joinpath(DIR_PRJ, "data", "oews", "presoc_manual.tsv"),
+	DataFrame,
+	delim = '\t'
+	) begin
+	@bind_rows(
+		DataFrame(occ_code = 0, occ_title = "Industry total",
+		component = "00-0000"
+		)
+	)
+	@arrange
+end
+```
+
+```{julia}
+oews_97_01_ = @chain industry_hist begin
+	@mutate(sic = lpad(string(sic), 3, '0'))
+    @left_join(sic_naics)
+    @mutate(
+        naics = case_when(
+            startswith(as_string(sic), '9') => rpad(sic, 4, '0'),
+            true => naics
+        ),
+        ratio = case_when(
+            startswith(as_string(sic), '9') => 100.0,
+            true => ratio
+        )
+    )
+    dropmissing!
+    @mutate(tot_emp = tot_emp * ratio / 100)
+    @mutate(naics = replace(naics, r"00$" => "10"))
+    @mutate(payroll = tot_emp * h_mean)
+    @group_by(occ_code, naics, year)
+    @summarize(
+        tot_emp = sum(tot_emp),
+        h_mean = sum(payroll) / sum(tot_emp),
+    )
+    @ungroup
+    @select(
+        occ_code = as_string(occ_code),
+        naics,
+        year,
+        tot_emp,
+        h_mean
+    )
+end
+```
+
+```{julia}
+payroll_97_01 = @chain oews_97_01_ begin
+    @mutate(payroll = tot_emp * h_mean)
+    @left_join(soc)
+    @group_by(soc18, naics, year)
+    @summarize(
+        tot_emp = sum(tot_emp),
+        h_mean = sum(payroll) / sum(tot_emp)
+    )
+    @ungroup
+    dropmissing!
+    @rename(occ_code = soc18)
+    @mutate(payroll = tot_emp * h_mean)
+    @left_join(occ_component_final)
+    @group_by(component, naics, year)
+    @summarize(
+        tot_emp = sum(tot_emp),
+        h_mean = sum(payroll) / sum(tot_emp)
+    )
+    @ungroup
+    dropmissing!
+    @arrange
+end
+```
+
+```{julia}
+CSV.write(
+	joinpath(DIR_PRJ, "data", "oews", "timeseries_97_01.tsv"),
+	oews_97_01_,
+	delim = '\t'
+)
+```

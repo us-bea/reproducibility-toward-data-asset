@@ -1,0 +1,1809 @@
+---
+title: "Impact on Accounts"
+author:
+  - id: jbsc
+    given: José Bayoán
+    family: Santiago Calderón
+    orcid: 0000-0002-8406-6175
+    email: Jose.Santiago-Calderon@bea.gov
+    degrees:
+      - PhD
+    affiliations:
+      - name: Bureau of Economic Analysis
+    group: Analysis and Research Group
+    department: National Economic Accounts
+    city: Suitland
+    state: MD
+    country: USA
+    postal-code: 20746
+    url: https://www.bea.gov
+    ror: https://ror.org/03b17a012
+    ringgold: 17145
+    isni: 0000000101060898
+    attributes:
+      corresponding: true   
+      roles:
+      # conceptualization:
+      - data curation: lead
+      - analysis: lead
+      # funding:
+      - investigation: lead
+      - methodology: lead
+      # project administration
+      # resources
+      - software: lead
+      # supervision
+      # validation
+      - visualization: lead
+      - writing: lead
+      - editing: lead
+date: today
+date-format: iso
+format:
+  html: 
+    code-fold: true
+    self-contained: true
+    smooth-scroll: true
+    html-math-method: katex
+bibliography: ../references.bib
+engine: julia
+abstract: |
+  Examines the impact of capitalizing own account data and databases across the national accounts.
+keywords:
+  - Sum of cost
+  - Own account
+  - IPPs
+license:
+  text: >
+    A work of the United States Government (17 U.S.C. § 105).
+  type: open-access
+  url: https://www.copyright.gov/title17/92chap1.html#105.
+---
+
+```{julia}
+const DIR_PRJ = string(strip(read(`git rev-parse --show-toplevel`, String)))
+using Pkg
+Pkg.activate(DIR_PRJ)
+```
+
+```{julia}
+using CSV, DataFrames, TidierData, ShiftedArrays
+using XLSX: XLSX, readtable
+using HTTP: HTTP, URI
+using Impute
+using CairoMakie
+using CairoMakie: RGB, Colors.distinguishable_colors
+using AlgebraOfGraphics
+set_aog_theme!()
+```
+
+```{julia}
+COLORS = [
+    RGB(0, 76 / 255, 151 / 255),
+    RGB(216 / 255, 96 / 255, 24 / 255),
+    RGB(158 / 255, 162 / 255, 162 / 255),
+    RGB(108 / 255, 172 / 255, 228 / 255),
+    RGB(195 / 255, 215 / 255, 238 / 255),
+    RGB(0, 125 / 255, 138 / 255),
+    RGB(45 / 255, 204 / 255, 211 / 255),
+    RGB(177 / 255, 228 / 255, 227 / 255),
+    RGB(193 / 255, 196 / 255, 197 / 255),
+    RGB(220 / 255, 222 / 255, 223 / 255),
+    RGB(242 / 255, 169 / 255, 0),
+    RGB(255 / 255, 233 / 255, 195 / 255),
+];
+CAT22 = [
+    RGBAf(230 // 255, 25 // 255, 75 // 255),
+    RGBAf(60 // 255, 180 // 255, 75 // 255),
+    RGBAf(255 // 255, 225 // 255, 25 // 255),
+    RGBAf(0 // 255, 130 // 255, 200 // 255),
+    RGBAf(245 // 255, 130 // 255, 48 // 255),
+    RGBAf(145 // 255, 30 // 255, 180 // 255),
+    RGBAf(70 // 255, 240 // 255, 240 // 255),
+    RGBAf(240 // 255, 50 // 255, 230 // 255),
+    RGBAf(210 // 255, 245 // 255, 60 // 255),
+    RGBAf(250 // 255, 190 // 255, 212 // 255),
+    RGBAf(0 // 255, 128 // 255, 128 // 255),
+    RGBAf(220 // 255, 190 // 255, 255 // 255),
+    RGBAf(170 // 255, 110 // 255, 40 // 255),
+    RGBAf(255 // 255, 250 // 255, 200 // 255),
+    RGBAf(128 // 255, 0 // 255, 0 // 255),
+    RGBAf(170 // 255, 255 // 255, 195 // 255),
+    RGBAf(128 // 255, 128 // 255, 0 // 255),
+    RGBAf(255 // 255, 215 // 255, 180 // 255),
+    RGBAf(0 // 255, 0 // 255, 128 // 255),
+    RGBAf(128 // 255, 128 // 255, 128 // 255),
+    RGBAf(255 // 255, 255 // 255, 255 // 255),
+    RGBAf(0 // 255, 0 // 255, 0 // 255)
+];
+```
+
+# Series
+
+```{julia}
+naics2ipa = CSV.read(
+    joinpath(DIR_PRJ, "data", "provided", "naics2ipa.tsv"),
+    DataFrame
+)
+```
+
+```{julia}
+flow = @chain CSV.read(
+    joinpath(DIR_PRJ, "data", "flow.tsv"),
+    DataFrame
+    ) begin
+    @inner_join(
+        @chain naics2ipa begin
+            @select(account, aggregate)
+            @distinct
+        end
+    )
+    @group_by(aggregate, year)
+    @summarize(
+        gfcf = sum(gfcf) / 1_000,
+        volume = sum(volume) / 1_000
+    )
+    @ungroup
+    @rename(account = aggregate)
+end
+```
+
+# GFCF
+
+```{julia}
+naics_renamer = [
+    "11" => "Agr/For/Fish/Hunt",
+    "21" => "Mining",
+    "22" => "Utilities",
+    "23" => "Construction",
+    "31G" => "Manufactoring",
+    "42" => "Wholesale",
+    "44RT" => "Retail",
+    "48TW" => "Trans/WH",
+    "51" => "Information",
+    "52" => "Fin/Insurance",
+    "53" => "RE/Rent/Lease",
+    "54" => "Prof/Sci/Tech",
+    "55" => "Management",
+    "56" => "Adm/Waste Mngt/Reme",
+    "61" => "Education",
+    "62" => "Health/Soc Asst",
+    "71" => "Arts, Ent, and Rec",
+    "72" => "Accn and Food",
+    "81" => "Other services",
+    "G" => "Gov"
+];
+```
+
+```{julia}
+plt_lvl = data(
+    @chain flow begin
+        @select(
+            account, year, value = gfcf
+    #     @group_by(year)
+    #     @summarize(value = sum(value))
+        )
+    end
+    ) *
+    mapping(
+        :year => "",
+        :value => "Billions of current dollars",
+        color = :account => renamer(
+            naics_renamer
+        ) => "",
+        stack = :account => "",
+    ) *
+    visual(BarPlot)
+plt_growth = data(
+    begin
+        x = @chain flow begin
+            @group_by(year)
+            @summarize(value = sum(gfcf))
+        end
+        x[!, :growth] = vcat(missing, diff(log.(x[!, :value])))
+        x
+    end
+    ) *
+    mapping(
+        :year => "",
+        :growth => (x -> 100x) => "Growth (%)",
+    ) *
+    visual(
+        BarPlot,
+        color = RGBAf(0, 0, 0, 0.25)
+    )
+fig = Figure(
+    fonts = (;
+        regular = "Dejavu",
+        weird = "Blackchancery"
+    )
+)
+gridpos = fig[1:2, :]
+f = draw!(
+    gridpos,
+    plt_lvl,
+    scales(
+        Color = (;
+            palette = CAT22
+        )
+    ),
+    axis = (;
+        xticks = 1997:2:2024,
+        yticks = 0:100:1_200,
+        xticklabelrotation = π / 4,
+        limits = (1996.5, 2024.5, 0, 1_200),
+    ),
+)
+legend!(
+    gridpos,
+    f;
+    orientation = :horizontal,
+    tellwidth = false,
+    halign = :left,
+    valign = :top,
+    nbanks = 4,
+    labelsize = 8,
+    colgap = 5
+)
+gridpos = fig[3, :]
+f2 = draw!(
+    gridpos,
+    plt_growth,
+    axis = (;
+        xticks = 1998:2:2024,
+        yticks = -10:5:20,
+        limits = (1997.5, 2024.5, -5, 15),
+        xticklabelrotation = π / 4,
+    ),
+)
+fig
+```
+
+```{julia}
+save(
+    joinpath(DIR_PRJ, "figs", "gfcf.eps"),
+    fig
+)
+```
+
+# Volume
+
+```{julia}
+plt_lvl = data(
+    @chain flow begin
+        @select(
+            account, year, value = volume
+        )
+        # @group_by(year)
+        # @summarize(value = sum(value))
+    end
+    ) *
+    mapping(
+        :year => "",
+        :value => "Billions of 2017 dollars",
+        color = :account => renamer(naics_renamer) => "",
+        stack = :account => "",
+    ) *
+    visual(BarPlot)
+plt_growth = data(
+    begin
+        x = @chain flow begin
+            @group_by(year)
+            @summarize(value = sum(volume))
+        end
+        x[!, :growth] = vcat(missing, diff(log.(x[!, :value])))
+        dropmissing!(x)
+        extrema(x.growth)
+        x
+    end
+    ) *
+    mapping(
+        :year => "",
+        :growth => (x -> 100x) => "Growth (%)",
+    ) *
+    visual(
+        BarPlot,
+        color = RGBAf(0, 0, 0, 0.25)
+    )
+fig = Figure()
+gridpos = fig[1:2, :]
+f = draw!(
+    gridpos,
+    plt_lvl,
+    scales(
+        Color = (;
+            palette = CAT22
+        )
+    ),
+    axis = (;
+        xticks = 1997:2:2024,
+        yticks = 0:100:1_000,
+        limits = (1996.5, 2024.5, 0, 1_000),
+        xticklabelrotation = π / 4,
+    ),
+)
+legend!(
+    gridpos,
+    f;
+    orientation = :horizontal,
+    tellwidth = false,
+    halign = :left,
+    valign = :top,
+    nbanks = 4,
+    labelsize = 8,
+    colgap = 5
+)
+gridpos = fig[3, :]
+f2 = draw!(
+    gridpos,
+    plt_growth,
+    axis = (;
+        xticks = 1998:2:2024,
+        yticks = -5:2.5:15,
+        limits = (1997.5, 2024.5, -2.5, 12.5),
+        xticklabelrotation = π / 4,
+    ),
+)
+fig
+```
+
+```{julia}
+save(
+    joinpath(DIR_PRJ, "figs", "volume.eps"),
+    fig
+)
+```
+
+```{julia}
+plt_lvl = data(
+    @chain flow begin
+        @select(
+            account, year, value = gfcf
+        )
+    end
+    ) *
+    mapping(
+        :year => "",
+        :value => "Billions of current dollars",
+        color = :account => renamer(
+            naics_renamer
+        ) => "",
+        stack = :account => "",
+    ) *
+    visual(BarPlot)
+plt_growth = data(
+    begin
+        x = @chain flow begin
+            @group_by(year)
+            @summarize(value = sum(volume))
+        end
+        x[!, :growth] = vcat(missing, diff(log.(x[!, :value])))
+        # extrema(skipmissing(x.growth))
+        x
+    end
+    ) *
+    mapping(
+        :year => "",
+        :growth => (x -> 100x) => "Growth (%)",
+    ) *
+    visual(
+        BarPlot,
+        color = RGBAf(0, 0, 0, 0.25)
+    )
+fig = Figure(
+    fonts = (;
+        regular = "Dejavu",
+        weird = "Blackchancery"
+    )
+)
+gridpos = fig[1:2, :]
+f = draw!(
+    gridpos,
+    plt_lvl,
+    scales(
+        Color = (;
+            palette = CAT22
+        )
+    ),
+    axis = (;
+        xticks = 1997:2:2024,
+        yticks = 0:100:1_200,
+        limits = (1996.5, 2024.5, 0, 1_200),
+        xticklabelrotation = π / 4,
+    ),
+)
+legend!(
+    gridpos,
+    f;
+    orientation = :horizontal,
+    tellwidth = false,
+    halign = :left,
+    valign = :top,
+    nbanks = 4,
+    labelsize = 8,
+    colgap = 5
+)
+gridpos = fig[3, :]
+f2 = draw!(
+    gridpos,
+    plt_growth,
+    axis = (;
+        xticks = 1998:2:2024,
+        yticks = -5:2.5:15,
+        limits = (1997.5, 2024.5, -2.5, 12.5),
+        xticklabelrotation = π / 4,
+    ),
+)
+fig
+```
+
+```{julia}
+save(
+    joinpath(DIR_PRJ, "figs", "flow.eps"),
+    fig
+)
+```
+
+```{julia}
+netstock = @chain CSV.read(
+    joinpath(DIR_PRJ, "data", "stock.tsv"),
+    DataFrame
+    ) begin
+    @inner_join(
+        @chain naics2ipa begin
+            @select(account, aggregate)
+            @distinct
+        end
+    )
+    @group_by(aggregate, year)
+    @summarize(
+        volume = sum(volume) / 1_000,
+        netstock = sum(netstock) / 1_000,
+        current_cost_netstock = sum(current_cost_netstock) / 1_000,
+        cfc = sum(cfc) / 1_000
+    )
+    @ungroup
+    @rename(account = aggregate)
+    @select(
+        account,
+        year,
+        netstock,
+        current_cost_netstock,
+        cfc
+    )
+    @filter((year - ~minimum(year)) ≥ 5)
+end
+```
+
+```{julia}
+gdp = @chain readtable(
+    joinpath(DIR_PRJ, "data", "bea", "ValueAdded.xlsx"),
+    "TVA105-A",
+    "A:AE",
+    first_row = 8
+) begin
+    DataFrame
+    first
+    @pivot_longer(Cols(contains(r"^\d{4}$")))
+    @select(variable, value)
+    @arrange
+    @select(
+        year = as_integer(variable),
+        gdp = as_integer(value) / 1_000
+    )
+    @inner_join(
+        @chain netstock begin
+            @filter(account == "G")
+            @select(year, cfc)
+        end
+    )
+    @inner_join(
+        @chain flow begin
+            @inner_join(netstock)
+            @group_by(year)
+            @summarize(
+                value = sum(
+                    case_when(
+                        account == "G" => cfc,
+                        true => gfcf
+                    )
+                )
+            )
+        end
+    )
+    @select(
+        year,
+        share = value / (gdp + cfc)
+    )
+end
+plt_gdp_share = data(
+    gdp
+) *
+    mapping(
+        :year => "",
+        :share => (x -> 100x) => "Share (%)",
+    ) *
+    visual(
+        BarPlot,
+        color = RGBAf(0, 0, 0, 0.25)
+    )
+fig_gdp_share = draw(
+    plt_gdp_share,
+    axis = (;
+        xticks = 2002:2:2024,
+        yticks = 1.25:0.05:3,
+        limits = (2001.5, 2024.5, 2.5, 3),
+        xticklabelrotation = π / 4,
+    ),
+)
+fig_gdp_share
+```
+
+```{julia}
+save(
+    joinpath(DIR_PRJ, "figs", "gfcf_gdp.eps"),
+    fig_gdp_share
+)
+```
+
+# Value added
+
+## Shares
+
+```{julia}
+ipa_key = DataFrame(
+    [
+        (title = "Gross domestic product", account = "GDP"),
+        (title = "Private industries", account = "PVT"),
+        (title = "Agriculture, forestry, fishing, and hunting", account = "11"),
+        (title = "Mining", account = "21"),
+        (title = "Utilities", account = "22"),
+        (title = "Construction", account = "23"),
+        (title = "Manufacturing", account = "31G"),
+        (title = "Wholesale trade", account = "42"),
+        (title = "Retail trade", account = "44RT"),
+        (title = "Transportation and warehousing", account = "48TW"),
+        (title = "Information", account = "51"),
+        (title = "Finance and insurance", account = "52"),
+        (title = "Real estate and rental and leasing", account = "53"),
+        (title = "Professional, scientific, and technical services", account = "54"),
+        (title = "Management of companies and enterprises", account = "55"),
+        (title = "Administrative and waste management services", account = "56"),
+        (title = "Educational services", account = "61"),
+        (title = "Health care and social assistance", account = "62"),
+        (title = "Arts, entertainment, and recreation", account = "71"),
+        (title = "Accommodation and food services", account = "72"),
+        (title = "Other services, except government", account = "81"),
+        (title = "Government", account = "G"),
+    ]
+)
+```
+
+```{julia}
+vaxind = @chain readtable(
+    joinpath(DIR_PRJ, "data", "bea", "ValueAdded.xlsx"),
+    "TVA105-A",
+    "A:AE", # Till 2024
+    first_row = 8
+    ) begin
+    DataFrame
+    rename("#Empty" => "title")
+    @select(Cols("title", r"\d{4}"))
+    @mutate(title = strip(title))
+    @inner_join(ipa_key)
+    @select(Cols("account", r"\d{4}"))
+    @pivot_longer(
+        cols = Not(:account),
+        names_to = year,
+        values_to = va
+    )
+    @select(
+        account = as_string(account),
+        year = as_integer(year),
+        va = as_integer(va)
+    )
+    @group_by(year, account)
+    @summarize(va = sum(va))
+    @ungroup
+end
+```
+
+```{julia}
+cfc_shares = @chain flow begin
+    @inner_join(netstock)
+    @mutate(
+        α = case_when(
+            true => cfc
+        ),
+        va_adjustment = case_when(
+            account == "G" => cfc,
+            true => gfcf
+        ),
+    )
+    @group_by(year)
+    @summarize(
+        va_adjustment = sum(va_adjustment),
+        α = sum(α)
+    )
+    @select(
+        account = "GDP",
+        year,
+        va_adjustment,
+        α
+    )
+    @bind_rows(
+        @chain flow begin
+            @filter(account ≠ "G")
+            @inner_join(netstock)
+            @group_by(year)
+            @summarize(
+                account = "PVT",
+                α = sum(cfc),
+                va_adjustment = sum(gfcf)
+            )
+        end
+    )
+    @bind_rows(
+        @chain flow begin
+            @inner_join(netstock)
+            @select(
+                account,
+                year,
+                α = case_when(
+                    true => cfc
+                ),
+                va_adjustment = case_when(
+                    account == "G" => cfc,
+                    true => gfcf
+                )
+            )
+        end
+    )
+    @inner_join(vaxind)
+    @select(
+        account,
+        year,
+        va = va + 1_000va_adjustment,
+        α
+    )
+    @mutate(share = 1_000α / va)
+    @select(-α)
+end
+```
+
+```{julia}
+@chain cfc_shares begin
+    @filter(account == "GDP")
+    @filter(year ∈ 2002:2024)
+    @mutate(share = 100share)
+    # @select(x = share / lag(share))
+    # transform!(:x => ByRow(log), renamecols = false)
+    # dropmissing!
+    # @mutate(x = 100x)
+    # @summarize(x = mean(x))
+end
+```
+
+```{julia}
+# ipa_key_dict = Dict(Main.ipa_key[!,:account] .=> Main.ipa_key[!,:title])
+# ipa_key_dict[cfc_shares.account[2]]
+plt_data = @chain cfc_shares begin
+    @filter(!((account ∈ Ref(["G", "GDP"])) & (year ∉ Ref(2002:2023))))
+    @mutate(share = 100share)
+    @arrange(account, year)
+    @group_by(account)
+    @summarize(
+        lowest = minimum(share),
+        highest = maximum(share),
+        latest = last(share)
+    )
+    @inner_join(@mutate(ipa_key, idx = ~eachindex(account)))
+    @mutate(idx = case_when(
+        account == "G" => 1.5,
+        true => idx)
+    )
+    # @mutate(
+    #     account = get(Ref(Main.ipa_key_dict), account, Main.missing)
+    # )
+    @arrange(idx)
+end
+plt = data(plt_data) *
+    mapping(
+        :title => sorter(reverse(plt_data[!,:title])) => "", # sorter(
+        #     vcat(
+        #         reverse(
+        #             filter(
+        #                 ∉(["Gross domestic product", "Government", "Private industries"]),
+        #                 plt_data[!, :account]
+        #             )
+        #         ),
+        #         "Private industries",
+        #         "Government",
+        #         "Gross domestic product",
+        #     )
+        # ) =>
+        # "",
+        :latest => "Latest [minimum, maximum] (%)",
+        :lowest => "Latest [minimum, maximum] (%)",
+        :highest => "Latest [minimum, maximum] (%)",
+    ) *
+    visual(
+        CrossBar,
+        color = RGBAf(0, 0, 0, 0.25),
+        orientation = :horizontal
+    )
+fig = draw(
+    plt,
+    axis = (;
+        xticks = 0:1.5:9,
+        limits = (0, 9, 0.5, 22.5),
+        yticklabelsize = 10,
+    )
+)
+```
+
+```{julia}
+save(
+    joinpath(DIR_PRJ, "figs", "share_cfc_va.eps"),
+    fig
+)
+```
+
+## Growth
+
+```{julia}
+vaxind_fqi = @chain readtable(
+    joinpath(DIR_PRJ, "data", "bea", "ValueAdded.xlsx"),
+    "TVA103-A",
+    "A:AD", # Up to 2023
+    first_row = 8
+    ) begin
+    DataFrame
+    rename("#Empty" => "title")
+    @select(Cols("title", r"\d{4}"))
+    @mutate(title = strip(title))
+    @inner_join(ipa_key)
+    @select(Cols("account", r"\d{4}"))
+    @pivot_longer(
+        cols = Not(:account),
+        names_to = year,
+    )
+    @select(
+        account = as_string(account),
+        year = as_integer(year),
+        fqi = as_float(value)
+    )
+    @group_by(account)
+    @summarize(
+        year,
+        published_growth = Main.log(fqi / lag(fqi))
+    )
+end
+```
+
+```{julia}
+vaxind_fpi = @chain readtable(
+    joinpath(DIR_PRJ, "data", "bea", "ValueAdded.xlsx"),
+    "TVA104-A",
+    "A:AD", # Up to 2023
+    first_row = 8
+    ) begin
+    DataFrame
+    rename("#Empty" => "title")
+    @select(Cols("title", r"\d{4}"))
+    @mutate(title = strip(title))
+    @inner_join(ipa_key)
+    @select(Cols("account", r"\d{4}"))
+    @pivot_longer(
+        cols = Not(:account),
+        names_to = year,
+    )
+    @select(
+        account = as_string(account),
+        year = as_integer(year),
+        fpi = as_float(value)
+    )
+end
+```
+
+```{julia}
+prices = @chain CSV.read(
+    joinpath(DIR_PRJ, "data", "prices.tsv"),
+    DataFrame
+)
+```
+
+```{julia}
+function obtain_prices(tbl)
+    prices = @chain tbl begin
+        @select(year, price)
+        @arrange
+        @mutate(x = case_when(
+            year == 2017 => 1.0,
+            true => missing
+            )
+        )
+    end
+    for i in range(
+        findfirst(isequal(2018), prices[!, :year]),
+        nrow(prices)
+        )
+        prices[i, :x] =
+            prices[i - 1, :x] *
+            exp(prices.price[i])
+    end
+    for i in collect(range(
+        findfirst(isequal(2016), prices[!, :year]),
+        1,
+        step = -1
+        ))
+        prices[i, :x] =
+            prices[i + 1, :x] /
+            exp(prices.price[i + 1])
+    end
+    output = @chain prices begin
+        @select(year, price = x)
+        dropmissing!
+    end
+end
+```
+
+```{julia}
+ind_shares = @chain flow begin
+    @inner_join(netstock)
+    @mutate(
+        α = case_when(
+            account == "G" => cfc,
+            true => gfcf
+        ),
+        va_adjustment = case_when(
+            account == "G" => cfc,
+            true => gfcf
+        ),
+    )
+    @group_by(year)
+    @summarize(
+        va_adjustment = sum(va_adjustment),
+        α = sum(α)
+    )
+    @select(
+        account = "GDP",
+        year,
+        va_adjustment,
+        α
+    )
+    @bind_rows(
+        @chain flow begin
+            @filter(account ≠ "G")
+            @group_by(year)
+            @summarize(
+                account = "PVT",
+                α = sum(gfcf),
+                va_adjustment = sum(gfcf)
+            )
+        end
+    )
+    @bind_rows(
+        @chain flow begin
+            @left_join(netstock)
+            @select(
+                account,
+                year,
+                α = case_when(
+                    account == "G" => cfc,
+                    true => gfcf
+                ),
+                va_adjustment = case_when(
+                    account == "G" => cfc,
+                    true => gfcf
+                )
+            )
+            @arrange(account, year)
+            dropmissing!
+        end
+    )
+    @inner_join(vaxind)
+    @select(
+        account,
+        year,
+        va = va + 1_000va_adjustment,
+        α
+    )
+    @mutate(share = 1_000α / va)
+    @select(-α)
+end
+```
+
+```{julia}
+growth_va = @chain ind_shares begin
+    @inner_join(vaxind_fpi)
+    @left_join(prices)
+    @arrange
+    @group_by(account)
+    combine(_) do subdf
+        @chain subdf begin
+            @select(
+                account, year,
+                va,
+                fpi = fpi / lag(fpi),
+                price = price / lag(price),
+                share = (share + lag(share)) / 2
+            )
+            transform!(
+                [:fpi, :price] .=> ByRow(log),
+                renamecols = false
+            )
+        end
+    end
+    #= Now to get the new prices =#
+    @select(
+        account, year,
+        price = share * price + (1 - share) * fpi
+    )
+    @arrange
+    @group_by(account)
+    combine(obtain_prices)
+    @rename(FPI = price)
+    @inner_join(
+        @chain ind_shares begin
+            @select(
+                account,
+                year,
+                va
+            )
+        end
+    )
+    @select(
+        account,
+        year,
+        VA = va / FPI
+    )
+    #= This can be toggle to explore the annualized GDP growth with data from 2008-2022.
+    @filter(account == "GDP")
+    @filter(year ∈ [2008, 2022])
+    end
+    100((growth_va[!, :VA][end] / growth_va[!, :VA][1])^inv(only(diff(growth_va[!, :year])))-1)
+    =#
+    @group_by(account)
+    @summarize(
+        year,
+        adj_growth = Main.log(VA / lag(VA))
+    )
+    dropmissing!
+    @inner_join(vaxind_fqi)
+    # @filter(
+        # (account ∉ ["GDP", "G"]) | (year ≥ (minimum(year) + 5))
+    # ) # To account for initial seed for CFC.
+    @group_by(account)
+    combine(_) do subdf
+        avg_pub = mean(subdf[!,:published_growth])
+        avg_adj = mean(subdf[!,:adj_growth])
+        cum_pub = sum(
+            subdf[!,:published_growth]
+        )
+        cum_adj = sum(
+            subdf[!,:adj_growth]
+        )
+        (;avg_pub, avg_adj, cum_pub, cum_adj)
+    end
+    @mutate(
+        avg_Δ = avg_adj - avg_pub,
+        cum_Δ = cum_adj - cum_pub
+    )
+    @select(
+        account,
+        avg_adj = round(100avg_adj, digits = 2),
+        avg_pub = round(100avg_pub, digits = 2),
+        avg_Δ = round(100avg_Δ, digits = 2),
+        cum_adj = round(100cum_adj, digits = 2),
+        cum_pub = round(100cum_pub, digits = 2),
+        cum_Δ = round(100cum_Δ, digits = 2)
+    )
+end
+```
+
+```{julia}
+CSV.write(
+    joinpath(DIR_PRJ, "data", "growth_va.tsv"),
+    growth_va,
+    delim = '\t'
+)
+```
+
+# Aggregates
+
+```{julia}
+isfile(joinpath(DIR_PRJ, "data", "bea", "FixedAssets_Series.txt")) ||
+    download(
+        string(
+            URI(
+                scheme = "https",
+                host = "apps.bea.gov",
+                path = "/national/FixedAssets/Release/TXT/SeriesRegister.txt"
+            )
+        ),
+        joinpath(DIR_PRJ, "data", "bea", "FixedAssets_Series.txt")
+    )
+```
+
+```{julia}
+fixed_assets_series_meta = CSV.read(
+    joinpath(DIR_PRJ, "data", "bea", "FixedAssets_Series.txt"),
+    DataFrame
+)
+```
+
+```{julia}
+isfile(joinpath(DIR_PRJ, "data", "bea", "FixedAssets.txt")) ||
+    download(
+        string(
+            URI(
+                scheme = "https",
+                host = "apps.bea.gov",
+                path = "/national/FixedAssets/Release/TXT/FixedAssets.txt"
+            )
+        ),
+        joinpath(DIR_PRJ, "data", "bea", "FixedAssets.txt")
+    )
+```
+
+```{julia}
+fixed_assets = CSV.read(
+    joinpath(DIR_PRJ, "data", "bea", "FixedAssets.txt"),
+    DataFrame
+)
+```
+
+```{julia}
+fixed_assets_series = @chain fixed_assets begin
+    @filter(`%SeriesCode` ∈ [
+        "i3ntotl1es00", # PN0 GFCF
+        "icntotl1es00", # PN0 FQI
+        "i3ntotl1ip00", # PNI GFCF
+        "icntotl1ip00", # PNI FQI
+        #=
+        "i3gtotl1esnr", # GN0 GFCF
+        "icgtotl1esnr", # GN0 FQI
+        =#
+        "i3gtotl1es00", # G00 GFCF
+        "icgtotl1es00", # G00 FQI
+        "i3gtotl1ip00", # GNI GFCF
+        "icgtotl1ip00", # GNI FQI
+        ]
+    )
+    @filter(Period > 1996)
+    @inner_join(fixed_assets_series_meta)
+    @mutate(Value = as_float(replace(Value, ',' => "")))
+end
+```
+
+```{julia}
+isfile(joinpath(DIR_PRJ, "data", "bea", "national_Series.txt")) ||
+    download(
+        string(
+            URI(
+                scheme = "https",
+                host = "apps.bea.gov",
+                path = "/national/Release/TXT/SeriesRegister.txt"
+            )
+        ),
+        joinpath(DIR_PRJ, "data", "bea", "national_Series.txt")
+    )
+```
+
+```{julia}
+national_series_meta = CSV.read(
+    joinpath(DIR_PRJ, "data", "bea", "national_Series.txt"),
+    DataFrame
+)
+```
+
+```{julia}
+isfile(joinpath(DIR_PRJ, "data", "bea", "NipaDataA.txt")) ||
+    download(
+        string(
+            URI(
+                scheme = "https",
+                host = "apps.bea.gov",
+                path = "/national/Release/TXT/NipaDataA.txt"
+            )
+        ),
+        joinpath(DIR_PRJ, "data", "bea", "NipaDataA.txt")
+    )
+```
+
+```{julia}
+national_assets = CSV.read(
+    joinpath(DIR_PRJ, "data", "bea", "NipaDataA.txt"),
+    DataFrame
+)
+```
+
+```{julia}
+national_series = @chain national_assets begin
+    @filter(`%SeriesCode` ∈ [
+        "B008RG", # P NR
+        "Y001RG", # P IPPs
+        "A782RG", # G FA
+        "Y055RG", # G IPPs
+        ]
+    )
+    @filter(Period > 1996)
+    @inner_join(national_series_meta)
+    @mutate(Value = as_float(replace(Value, ',' => "")))
+end
+```
+
+## Shares of FA
+
+### Compute shares
+
+```{julia}
+nominal_sector = @chain flow begin
+    @mutate(sector = case_when(
+        account == "G" => "Public",
+        true => "Private"
+        )
+    )
+    @group_by(year, sector)
+    @summarize(gfcf = sum(gfcf))
+    @ungroup
+    @inner_join(
+        x = @chain fixed_assets_series begin
+            @filter(MetricName == "Historical Cost")
+            rename("%SeriesCode" => "series_code")
+            @select(
+                year = Period,
+                nominal = Value / 1_000,
+                variable = case_when(
+                    endswith(series_code, r"es(00|nr)") => "NR/FA",
+                    endswith(series_code, "ip00") => "IPP"
+                ),
+                sector = case_when(
+                    SubString(series_code, 3, 3) == "g" => "Public",
+                    SubString(series_code, 3, 3) == "n" => "Private"
+                ),
+            )
+        end
+    )
+    @mutate(share = gfcf / (nominal + gfcf))
+end
+```
+
+```{julia}
+plt = data(
+    begin
+    x = @chain nominal_sector begin
+        @filter(sector == "Public")
+        @filter(variable == "IPP")
+        @select(
+            year,
+            value = 100share
+        )
+    end
+    end
+    ) *
+    mapping(
+        :year => "",
+        :value => "Share (%)",
+    ) *
+    visual(BarPlot, color = RGBAf(0, 0, 0, 0.25))
+fig = Figure()
+gridpos = fig[1, 1]
+f = draw!(
+    gridpos,
+    plt,
+    axis = (;
+        title = "Government IPPs",
+        xticks = 1997:2:2024,
+        # yticks = 0:250:1750,
+        limits = (1996.5, 2024.5, 0, 40),
+        xticklabelrotation = π / 4,
+    ),
+)
+gridpos = fig[1, 2]
+plt = data(
+    begin
+    x = @chain nominal_sector begin
+        @filter(sector == "Private")
+        @filter(variable == "IPP")
+        @select(
+            year,
+            value = 100share
+        )
+    end
+    end
+    ) *
+    mapping(
+        :year => "",
+        :value => "",
+    ) *
+    visual(BarPlot, color = RGBAf(0, 0, 0, 0.25))
+f = draw!(
+    gridpos,
+    plt,
+    axis = (;
+        title = "Private IPPs",
+        xticks = 1997:2:2024,
+        # yticks = 0:250:1750,
+        limits = (1996.5, 2024.5, 0, 40),
+        xticklabelrotation = π / 4,
+    ),
+)
+gridpos = fig[2, 1]
+plt = data(
+    begin
+    x = @chain nominal_sector begin
+        @filter(sector == "Public")
+        @filter(variable == "NR/FA")
+        @select(
+            year,
+            value = 100share
+        )
+    end
+    end
+    ) *
+    mapping(
+        :year => "Year",
+        :value => "Share (%)",
+    ) *
+    visual(BarPlot, color = RGBAf(0, 0, 0, 0.25))
+f = draw!(
+    gridpos,
+    plt,
+    axis = (;
+        title = "Government Fixed Assets",
+        xticks = 1997:2:2024,
+        # yticks = 0:250:1750,
+        limits = (1996.5, 2024.5, 0, 20),
+        xticklabelrotation = π / 4,
+    ),
+)
+gridpos = fig[2, 2]
+plt = data(
+    begin
+    x = @chain nominal_sector begin
+        @filter(sector == "Private")
+        @filter(variable == "NR/FA")
+        @select(
+            year,
+            value = 100share
+        )
+    end
+    end
+    ) *
+    mapping(
+        :year => "Year",
+        :value => "",
+    ) *
+    visual(BarPlot, color = RGBAf(0, 0, 0, 0.25))
+f = draw!(
+    gridpos,
+    plt,
+    axis = (;
+        title = "Private Nonresidential Fixed Assets",
+        xticks = 1997:2:2024,
+        # yticks = 0:250:1750,
+        limits = (1996.5, 2024.5, 0, 20),
+        xticklabelrotation = π / 4,
+    ),
+)
+fig
+```
+
+```{julia}
+save(
+    joinpath(DIR_PRJ, "figs", "share_fa.eps"),
+    fig
+)
+```
+
+### IPPs
+
+```{julia}
+det_fa_series = @chain fixed_assets begin
+    @filter(`%SeriesCode` ∈ [
+        # "i3ntotl1eq00", # PNE
+        # "i3ntotl1st00", # PNS
+        "i3ntotl1ens0", # PS
+        "i3ntotl1rd00", # PR&D
+        "i3ntotl1ae00", # PELAO
+        # "i3gtotl1eq00", # GNE
+        # "i3gtotl1stnr", # GNS
+        "i3gtotl1ens0", # GS
+        "i3gtotl1rd00", # GR&D
+        ]
+    )
+    @filter(Period ∈ 1997:2024)
+    @inner_join(fixed_assets_series_meta)
+    @mutate(Value = as_float(replace(Value, ',' => "")))
+    @select(
+        SeriesLabel = case_when(
+            SeriesLabel == "Entertainment, literary, and artistic originals" => "ELAO",
+            SeriesLabel == "Research and development" => "R&D",
+            true => SeriesLabel
+        ),
+        sector = case_when(
+            SubString(`%SeriesCode`, 3, 3) == "n" => "Private",
+            SubString(`%SeriesCode`, 3, 3) == "g" => "Government"
+        ),
+        year = Period,
+        Value
+    )
+    @bind_rows(
+        @chain flow begin
+            @mutate(
+                sector = case_when(
+                    account ≠ "G" => "Private",
+                    account == "G" => "Government"
+                )
+            )
+            @group_by(year, sector)
+            @summarize(Value = 1_000sum(gfcf))
+            @ungroup
+            @mutate(SeriesLabel = "DD")
+        end
+    )
+    @filter(
+        SeriesLabel ∈ ["R&D", "Software", "DD", "ELAO"]
+    )
+end
+det_fa_shares = @chain det_fa_series begin
+    @group_by(year, sector)
+    @summarize(den = sum(Value))
+    @ungroup
+    @inner_join(det_fa_series)
+    @mutate(value = 100Value / den)
+end
+```
+
+```{julia}
+plt = data(det_fa_shares) *
+    mapping(
+        :year => "Year",
+        :value => "Share (%)",
+        color = :SeriesLabel => sorter(
+            ["Equipment", "Structures", "R&D", "Software", "DD", "ELAO"]
+        ) => "",
+        stack = :SeriesLabel => sorter(
+            ["Equipment", "Structures", "R&D", "Software", "DD", "ELAO"]
+        ),
+        row = :sector => ""
+    ) *
+    visual(BarPlot)
+fig = draw(
+    plt,
+    scales(
+        Color = (;
+            palette = distinguishable_colors(
+                20,
+                COLORS[vcat(1:4, 6:7)]
+            )
+        )
+    ),
+    axis = (;
+        xticks = 1997:2:2024,
+        # yticks = -0.15:0.05:0.15,
+        limits = (1996.5, 2024.5, nothing, nothing),
+        # xticklabelrotation = π / 3,
+    ),
+    legend = (;
+        position=:top,
+        nbanks = 1
+    ),
+    facet = (;
+        linkyaxes = :rowwise
+    )
+)
+```
+
+```{julia}
+save(
+    joinpath(DIR_PRJ, "figs", "share_ipp.eps"),
+    fig
+)
+```
+
+## Growth FA
+
+```{julia}
+growth_gfcf = @chain nominal_sector begin
+    @inner_join(
+        x = @chain national_series begin
+            @filter(MetricName == "Fisher Price Index")
+            rename!("%SeriesCode" => "series_code")
+            @select(
+                year = Period,
+                fpi = Value,
+                variable = case_when(
+                    contains(SeriesLabel, "Intellectual property products") => "IPP",
+                    SeriesLabel ∈ [
+                        "Gross government fixed investment",
+                        "Nonresidential"
+                        ] => "NR/FA",
+                    true => missing
+                ),
+                sector = case_when(
+                    contains(`TableId:LineNo`, "T50904") => "Public",
+                    contains(`TableId:LineNo`, "T50304") => "Private",
+                    true => missing
+                ),
+            )
+        end
+    )
+    @left_join(prices)
+    @arrange
+    @group_by(sector, variable)
+    combine(_) do subdf
+        @chain subdf begin
+            @mutate(Laspeyres_share = lag(share))
+            rename("share" => "Paasche_share")
+            @select(
+                sector, variable, year,
+                fpi = Main.log(fpi / lag(fpi)),
+                price = Main.log(price / lag(price)),
+                Laspeyres_share, Paasche_share,
+            )
+        end
+    end
+    @mutate(
+        Laspeyres = Laspeyres_share * price + (1 - Laspeyres_share) * fpi,
+        Paasche = Paasche_share * price + (1 - Paasche_share) * fpi,
+    )
+    #= Now to get the new prices =#
+    @select(
+        sector, variable, year,
+        price = (Laspeyres + Paasche) / 2
+    )
+    @arrange
+    @group_by(sector, variable)
+    combine(obtain_prices)
+    @ungroup
+    @inner_join(
+        @chain nominal_sector begin
+            @select(
+                sector, variable, year,
+                Nominal = (nominal + gfcf)
+            )
+        end
+    )
+    @mutate(volume = Nominal / price)
+    @arrange
+    @group_by(sector, variable)
+    @summarize(
+        year = year,
+        volume = Main.log(volume / lag(volume))
+    )
+    @ungroup
+    dropmissing!
+    @inner_join(
+        x = @chain fixed_assets_series begin
+            @filter(MetricName == "Fisher Quantity Index")
+            rename("%SeriesCode" => "series_code")
+            @select(
+                year = Period,
+                fqi = Value,
+                variable = case_when(
+                    endswith(series_code, r"es(00|nr)") => "NR/FA",
+                    endswith(series_code, "ip00") => "IPP"
+                ),
+                sector = case_when(
+                    SubString(series_code, 3, 3) == "g" => "Public",
+                    SubString(series_code, 3, 3) == "n" => "Private"
+                ),
+            )
+            @arrange
+            @group_by(sector, variable)
+            @summarize(
+                year,
+                fqi = Main.log(fqi / lag(fqi))
+            )
+            @ungroup
+            dropmissing!
+        end
+    )
+    rename!(
+        :volume => :adj_growth,
+        :fqi => :published_growth
+    )
+    @mutate(Δ_growth = adj_growth - published_growth)
+    @group_by(sector, variable)
+    combine(_) do subdf
+        avg_pub = mean(subdf[!,:published_growth])
+        avg_adj = mean(subdf[!,:adj_growth])
+        cum_pub = sum(
+            subdf[!,:published_growth]
+        )
+        cum_adj = sum(
+            subdf[!,:adj_growth]
+        )
+        (;avg_pub, avg_adj, cum_pub, cum_adj)
+    end
+    @mutate(
+        avg_Δ = avg_adj - avg_pub,
+        cum_Δ = cum_adj - cum_pub
+    )
+    @select(
+        sector,
+        variable,
+        avg_adj = round(100avg_adj, digits = 2),
+        avg_pub = round(100avg_pub, digits = 2),
+        avg_Δ = round(100avg_Δ, digits = 2),
+        cum_adj = round(100cum_adj, digits = 2),
+        cum_pub = round(100cum_pub, digits = 2),
+        cum_Δ = round(100cum_Δ, digits = 2)
+    )
+end
+```
+
+# Netstock
+
+```{julia}
+plt_lvl = data(
+    @chain netstock begin
+        @select(
+            account, year, value = current_cost_netstock
+        )
+    end
+    ) *
+    mapping(
+        :year => "",
+        :value => "Billions of current dollars",
+        color = :account => renamer(naics_renamer) => "",
+        stack = :account => "",
+    ) *
+    visual(BarPlot)
+plt_growth = data(
+    begin
+        x = @chain netstock begin
+            @group_by(year)
+            @summarize(value = sum(netstock))
+        end
+        x[!, :growth] = vcat(missing, diff(log.(x[!, :value])))
+        x = dropmissing(x)
+        # x = x[5:end,:]
+        x
+    end
+    ) *
+    mapping(
+        :year => "",
+        :growth => (x -> 100x) => "Growth (%)",
+    ) *
+    visual(
+        BarPlot,
+        color = RGBAf(0, 0, 0, 0.25)
+    )
+fig = Figure()
+gridpos = fig[1:2, :]
+f = draw!(
+    gridpos,
+    plt_lvl,
+    scales(
+        Color = (;
+            palette = CAT22
+        )
+    ),
+    axis = (;
+        xticks = 2002:2:2024,
+        yticks = 0:250:2_500,
+        limits = (2001.5, 2024.5, 0, 2_500),
+        xticklabelrotation = π / 4,
+    ),
+)
+legend!(
+    gridpos,
+    f;
+    orientation = :horizontal,
+    tellwidth = false,
+    halign = :left,
+    valign = :top,
+    nbanks = 4,
+    labelsize = 8,
+    colgap = 5
+)
+gridpos = fig[3, :]
+f2 = draw!(
+    gridpos,
+    plt_growth,
+    axis = (;
+        xticks = 2003:2:2024,
+        limits = (2002.5, 2024.5, 0, 8),
+        xticklabelrotation = π / 4,
+    ),
+)
+fig
+```
+
+```{julia}
+save(
+    joinpath(DIR_PRJ, "figs", "netstock.eps"),
+    fig
+)
+```
+
+## Fixed Assets
+
+### Shares
+
+```{julia}
+fixed_assets_series_stock = @chain fixed_assets begin
+    @filter(`%SeriesCode` ∈ [
+        "k1ntotl1es00", # PN0 Stock
+        # "kcntotl1es00", # PN0 FQI Stock
+        "k1ntotl1ip00", # PIPPs Stock
+        # "kcntotl1ip00", # PIIPs FQI Stock
+        "k1gtotl1es00", # G00 Stock
+        # "kcgtotl1es00", # G00 FQI Stock
+        "k1gtotl1ip00", # GIPPs Stock
+        # "kcgtotl1ip00", # GIPPs FQI Stock
+        ]
+    )
+    @filter(Period > 1996)
+    @inner_join(fixed_assets_series_meta)
+    @mutate(Value = as_float(replace(Value, ',' => "")))
+end
+```
+
+```{julia}
+share_stock = @chain netstock begin
+    # @filter(year ≥ 2008)
+    @mutate(sector = case_when(
+        account == "G" => "Public",
+        true => "Private"
+        )
+    )
+    @group_by(sector, year)
+    @summarize(ns = 1_000sum(current_cost_netstock))
+    @ungroup
+    @inner_join(
+        x = @chain fixed_assets_series_stock begin
+            @filter(MetricName == "Current Dollars")
+            rename("%SeriesCode" => "series_code")
+            @select(
+                year = Period,
+                stock = Value,
+                variable = case_when(
+                    endswith(series_code, r"es(00|nr)") => "NR/FA",
+                    endswith(series_code, "ip00") => "IPP"
+                ),
+                sector = case_when(
+                    SubString(series_code, 3, 3) == "g" => "Public",
+                    SubString(series_code, 3, 3) == "n" => "Private"
+                ),
+            )
+        end
+    )
+    @mutate(
+        share = ns / (stock + ns),
+    )
+    # @filter((year - ~minimum(year)) ≥ 5)
+end
+```
+
+```{julia}
+plt = data(
+    begin
+    x = @chain share_stock begin
+        @filter(sector == "Public")
+        @filter(variable == "IPP")
+        @select(
+            year,
+            value = 100share
+        )
+    end
+    end
+    ) *
+    mapping(
+        :year => "",
+        :value => "Share (%)",
+    ) *
+    visual(BarPlot, color = RGBAf(0, 0, 0, 0.25))
+fig = Figure()
+gridpos = fig[1, 1]
+f = draw!(
+    gridpos,
+    plt,
+    axis = (;
+        title = "Government IPPs",
+        xticks = 2002:2:2024,
+        # yticks = 0:250:1750,
+        limits = (2001.5, 2024.5, 0, 30),
+        xticklabelrotation = π / 4,
+    ),
+)
+gridpos = fig[1, 2]
+plt = data(
+    begin
+    x = @chain share_stock begin
+        @filter(sector == "Private")
+        @filter(variable == "IPP")
+        @select(
+            year,
+            value = 100share
+        )
+    end
+    end
+    ) *
+    mapping(
+        :year => "",
+        :value => "",
+    ) *
+    visual(BarPlot, color = RGBAf(0, 0, 0, 0.25))
+f = draw!(
+    gridpos,
+    plt,
+    axis = (;
+        title = "Private IPPs",
+        xticks = 2002:2:2024,
+        # yticks = 0:250:1750,
+        limits = (2001.5, 2024.5, 0, 30),
+        xticklabelrotation = π / 4,
+    ),
+)
+gridpos = fig[2, 1]
+plt = data(
+    begin
+    x = @chain share_stock begin
+        @filter(sector == "Public")
+        @filter(variable == "NR/FA")
+        @select(
+            year,
+            value = 100share
+        )
+    end
+    end
+    ) *
+    mapping(
+        :year => "Year",
+        :value => "Share (%)",
+    ) *
+    visual(BarPlot, color = RGBAf(0, 0, 0, 0.25))
+f = draw!(
+    gridpos,
+    plt,
+    axis = (;
+        title = "Government Fixed Assets",
+        xticks = 2002:2:2024,
+        # yticks = 0:250:1750,
+        limits = (2001.5, 2024.5, 0, 5),
+        xticklabelrotation = π / 4,
+    ),
+)
+gridpos = fig[2, 2]
+plt = data(
+    begin
+    x = @chain share_stock begin
+        @filter(sector == "Private")
+        @filter(variable == "NR/FA")
+        @select(
+            year,
+            value = 100share
+        )
+    end
+    end
+    ) *
+    mapping(
+        :year => "Year",
+        :value => "",
+    ) *
+    visual(BarPlot, color = RGBAf(0, 0, 0, 0.25))
+f = draw!(
+    gridpos,
+    plt,
+    axis = (;
+        title = "Private Nonresidential Fixed Assets",
+        xticks = 2002:2:2024,
+        # yticks = 0:250:1750,
+        limits = (2001.5, 2024.5, 0, 5),
+        xticklabelrotation = π / 4,
+    ),
+)
+fig
+```
+
+```{julia}
+save(
+    joinpath(DIR_PRJ, "figs", "share_stock.eps"),
+    fig
+)
+```

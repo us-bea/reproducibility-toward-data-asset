@@ -1,0 +1,284 @@
+---
+title: "Inputs from the national economic accounts"
+author:
+  - id: jbsc
+    given: José Bayoán
+    family: Santiago Calderón
+    orcid: 0000-0002-8406-6175
+    email: Jose.Santiago-Calderon@bea.gov
+    degrees:
+      - PhD
+    affiliations:
+      - name: Bureau of Economic Analysis
+        group: Analysis and Research Group
+        department: National Economic Accounts
+        city: Suitland
+        state: MD
+        country: USA
+        postal-code: 20746
+        url: https://www.bea.gov
+        ror: https://ror.org/03b17a012
+        ringgold: 17145
+        isni: 0000000101060898
+    attributes:
+      corresponding: true   
+    roles:
+      - data curation: lead
+      - analysis: lead
+      - investigation: lead
+      - methodology: lead
+      - software: lead
+      - visualization: lead
+      - writing: lead
+      - editing: lead
+date: today
+date-format: iso
+format:
+  html: 
+    code-fold: true
+    self-contained: true
+    smooth-scroll: true
+    html-math-method: katex
+bibliography: ../references.bib
+engine: julia
+abstract: |
+  This script uses national economic accounts data to provide revelevant series for estimating own account data.
+keywords:
+  - Sum of cost
+  - Own account
+  - IPPs
+license:
+  text: >
+    A work of the United States Government (17 U.S.C. § 105).
+  type: open-access
+  url: https://www.copyright.gov/title17/92chap1.html#105.
+---
+
+We start by instantiating the environment.
+
+```{julia}
+const DIR_PRJ = string(strip(read(`git rev-parse --show-toplevel`, String)))
+using Pkg
+Pkg.activate(DIR_PRJ)
+# Pkg.update()
+using DataAssets
+using CSV, DataFrames, TidierData
+using HTTP: HTTP, URI, request
+using unzip_jll: unzip
+```
+
+# Data Sources
+
+```{julia}
+isdir(joinpath(DIR_PRJ, "data", "bea")) || mkdir(joinpath(DIR_PRJ, "data", "bea"))
+```
+
+- BEA/BLS Integrated Industry-level Production Account 1997--2023 [@ILPA97_23]
+
+```{julia}
+let
+    infile = joinpath(DIR_PRJ, "data", "bea", "BEA-BLS-industry-level-production-account-1997-2023.xlsx")
+    if !isfile(infile)
+        download(
+            string(
+                URI(
+                    scheme="https",
+                    host="www.bea.gov",
+                    path="/sites/default/files/2025-04/BEA-BLS-industry-level-production-account-1997-2023.xlsx"
+                )
+            ),
+            infile
+        )
+    end
+end
+```
+
+- BEA/BLS Integrated Industry-level Production Account 1987--2021 [@ILPA87_21]
+
+It has been provided in the directory (https://web.archive.org/web/20250423215430/https://www.bea.gov/system/files/2023-09/BEA-BLS-industry-level-production-account-1987-2021.xlsx).
+
+- Latest GDP By Industry
+
+```{julia}
+let
+    infile = joinpath(DIR_PRJ, "data", "bea", "GdpByInd.zip")
+    if !isfile(infile)
+        download(
+            string(
+                URI(
+                    scheme="https",
+                    host="apps.bea.gov",
+                    path="/industry/Release/ZIP/GdpByInd.zip"
+                )
+            ),
+            infile
+        )
+    end
+    if !isfile(joinpath(DIR_PRJ, "data", "bea", "KLEMS.xlsx"))
+        dir = dirname(infile)
+        run(`$(unzip()) -o $infile -d $dir`)
+    end
+end
+```
+
+- GDP By Industry (1963--1997)
+
+```{julia}
+let
+    infile = joinpath(DIR_PRJ, "data", "bea", "AllTablesHist.zip")
+    if !isfile(infile)
+        download(
+            string(
+                URI(
+                    scheme="https",
+                    host="apps.bea.gov",
+                    path="/industry/iTables%20Static%20Files/AllTablesHist.zip"
+                )
+            ),
+            infile
+        )
+    end
+    if !isfile(joinpath(DIR_PRJ, "data", "bea", "GDPbyInd_KLEMS_1963-1997.xlsx"))
+        dir = dirname(infile)
+        run(`$(unzip()) $infile -d $dir`)
+    end
+end
+```
+
+- NIPA (used for the outyear)
+
+```{julia}
+let
+    infile = joinpath(DIR_PRJ, "data", "bea", "Section2All_xls.xlsx")
+    if !isfile(infile)
+        download(
+            string(
+                URI(
+                    scheme="https",
+                    host="/apps.bea.gov",
+                    path="/national/Release/XLS/Survey/Section2All_xls.xlsx"
+                )
+            ),
+            infile
+        )
+    end
+end
+```
+
+# Labor compensation
+
+Using the BEA/BLS Integrated Industry-level Production Account (ILPA) labor compensation estimates, develop a series from 1987 -- 2024.
+
+We first use the 2025-04-25 release for 1997 -- 2023.
+
+We then use the 2023-09-29 release and best change to extend the series to span 1987 -- 2023.
+
+```{julia}
+labor_compensation_87_23 = get_ilpa(get_ilpa()) # Obtain latest ILPA labor compensation and use best change to extend the series to span 1987--2023.
+```
+
+We use the KLEMS distribution of compensation of employees (CoE) to distribute the labor cost to the summary detailed accounts. For the distribution pre-1997, we use the shares based on the 1997 distribution. We use the historical GDPByIndustry KLEMS and the 24Q2 release.
+
+```{julia}
+labor_compensation_summary = ilpa2summary(labor_compensation_87_23)
+```
+
+We then use the NIPA Table 2.2B. Wages and Salaries by Industry from the 24Q3 3rd release (2025-03-28) to apply a best guess of change to the industries.
+
+```{julia}
+labor_ = labor_outyear(labor_compensation_summary)
+labor = @chain labor_ begin
+    #= Fix issue with 531 =#
+    @filter(account == "532RL")
+    @select(year, adj = value)
+    @inner_join(
+        @chain labor_ begin
+            @mutate(
+                account = case_when(
+                    account ∈ ["HS", "ORE"] => "531",
+                    true => account
+                )
+            )
+            @group_by(account, year)
+            @summarize(value = sum(value))
+            @ungroup
+        end
+    )
+    @select(
+        account, year,
+        value = case_when(
+            account == "531" => value - adj,
+            true => value
+        )
+    )
+    @arrange
+end
+```
+
+```{julia}
+CSV.write(
+    joinpath(DIR_PRJ, "data", "labor_compensation_87_24_summary.tsv"),
+    labor,
+    delim='\t'
+)
+```
+
+# Full production cost adjustment factor
+
+Th full production cost adjustment factor will be developed based on the ratio of gross output over labor compensation. We will use gross output at basic prices to best proxy for industry costs. The representative industries are 514 and 5415.
+
+```{julia}
+@doc get_go_basic_514_5415()
+```
+
+```{julia}
+go_basic_514_5415 = get_go_basic_514_5415()
+```
+
+```{julia}
+fpcaf = compute_go_labor_514_5415(labor, go_basic_514_5415)
+```
+
+```{julia}
+CSV.write(
+    joinpath(DIR_PRJ, "data", "fpcaf.tsv"),
+    fpcaf,
+    delim='\t'
+)
+```
+
+# Intermediate inputs
+
+Calculate the compensation of intermediate inputs for the composite industry 514/5415 and their price contribution.
+
+```{julia}
+ii = prices_ii(labor)
+```
+
+# Total productivity factor
+
+```{julia}
+tfp = representative_productivity()
+```
+
+# Inputs for prices
+
+Includes the price effect from intermediate inputs, the weights for the labor price effect and the productivity adjustment.
+
+```{julia}
+alems = @chain ii begin
+    @bind_rows(
+        @chain tfp begin
+            @mutate(wgt = 1.0)
+        end
+    )
+end
+```
+
+```{julia}
+CSV.write(
+    joinpath(DIR_PRJ, "data", "alems.tsv"),
+    alems,
+    delim='\t'
+)
+```

@@ -1,0 +1,130 @@
+---
+title: "Impact on Accounts"
+author:
+  - id: jbsc
+    given: José Bayoán
+    family: Santiago Calderón
+    orcid: 0000-0002-8406-6175
+    email: Jose.Santiago-Calderon@bea.gov
+    degrees:
+      - PhD
+    affiliations:
+      - name: Bureau of Economic Analysis
+    group: Analysis and Research Group
+    department: National Economic Accounts
+    city: Suitland
+    state: MD
+    country: USA
+    postal-code: 20746
+    url: https://www.bea.gov
+    ror: https://ror.org/03b17a012
+    ringgold: 17145
+    isni: 0000000101060898
+    attributes:
+      corresponding: true   
+      roles:
+      # conceptualization:
+      - data curation: lead
+      - analysis: lead
+      # funding:
+      - investigation: lead
+      - methodology: lead
+      # project administration
+      # resources
+      - software: lead
+      # supervision
+      # validation
+      - visualization: lead
+      - writing: lead
+      - editing: lead
+date: today
+date-format: iso
+format:
+  html: 
+    code-fold: true
+    self-contained: true
+    smooth-scroll: true
+    html-math-method: katex
+bibliography: ../references.bib
+engine: julia
+abstract: |
+  This script creates the tables to be published for the experimental satellite account.
+keywords:
+  - Sum of cost
+  - Own account
+  - IPPs
+license:
+  text: >
+    A work of the United States Government (17 U.S.C. § 105).
+  type: open-access
+  url: https://www.copyright.gov/title17/92chap1.html#105.
+---
+
+```{julia}
+const DIR_PRJ = string(strip(read(`git rev-parse --show-toplevel`, String)))
+using Pkg
+Pkg.activate(DIR_PRJ)
+```
+
+```{julia}
+using CSV, DataFrames, TidierData
+using XLSX: XLSX, readtable, openxlsx, writetable!
+```
+
+# Series
+
+```{julia}
+tbl_template = @chain CSV.read(
+  joinpath(DIR_PRJ, "data", "provided", "tbl_template.tsv"),
+  DataFrame
+  ) begin
+  @mutate(line = ~eachindex(industry))
+  @mutate(level = length.(getproperty.(match(r"\s*", industry), :match)) ÷ 4)
+  @mutate(level = if_else(account == "GDP", -1, level))
+end
+```
+
+```{julia}
+flows = CSV.read(
+  joinpath(DIR_PRJ, "data", "flow.tsv"),
+  DataFrame
+)
+```
+
+```{julia}
+tbl = @chain tbl_template begin
+  @inner_join(
+    @chain flows begin
+      @select(account, year, value = gfcf)
+      dropmissing!
+    end
+  )
+  @pivot_wider(
+    names_from = year,
+    values_from = value,
+  )
+  @right_join(tbl_template)
+  @arrange(line)
+end
+k = Cols(contains(r"^\d{4}$"))
+for i in nrow(tbl):-1:1
+  if ismissing(tbl[i, end])
+    lvl = tbl[i, :level]
+    idx_max = something(
+      findfirst(≤(lvl), tbl[i + 1:end, :level]),
+      length(tbl[i + 1:end, :level]) + 1
+    ) + i - 1
+    candidates = findall(isequal(lvl + 1), tbl[!, :level])
+    filter!(∈(i:idx_max), candidates)
+    tbl[i, k] = sum(Matrix(tbl[candidates, k]), dims = 1)
+  end
+end
+```
+
+```{julia}
+CSV.write(
+  joinpath(DIR_PRJ, "data", "pub_tbl_gfcf.tsv"),
+  tbl,
+  delim = '\t'
+)
+```
