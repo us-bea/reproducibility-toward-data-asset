@@ -23,3 +23,4 @@ Reproducibility artifact for the [BEA Working Paper: Toward Experimental Economi
 
 - Certain data files that cannot be programatically downloaded due to website restrictions have been included for convenience.
 - Large data files that are processed within the files only attempt to run the code to generate these if the cache versions are not available. These parsed and processed files have been provided to make the code more accessible.
+- For exploring the experimental estimates: `outputs/Experimental Estimates.xlsx`.
